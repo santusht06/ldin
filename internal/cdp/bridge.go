@@ -86,15 +86,43 @@ func ListTabs(host string, port int) ([]*TabInfo, error) {
 	return tabs, nil
 }
 
-// FindLinkedInTab returns the best tab for LinkedIn requests
+// OpenNewTab opens a new tab in Chrome with the given URL and returns its TabInfo
+func OpenNewTab(host string, port int, targetURL string) (*TabInfo, error) {
+	reqURL := fmt.Sprintf("http://%s:%d/json/new?%s", host, port, targetURL)
+	req, err := http.NewRequest("PUT", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var tab TabInfo
+	if err := json.Unmarshal(body, &tab); err != nil {
+		return nil, err
+	}
+	return &tab, nil
+}
+
+// FindLinkedInTab returns the best tab for LinkedIn requests, opening one automatically if needed
 func FindLinkedInTab(tabs []*TabInfo) *TabInfo {
-	// Prefer a LinkedIn tab already open
+	// 1. Prefer a LinkedIn tab already open
 	for _, t := range tabs {
 		if t.Type == "page" && strings.Contains(t.URL, "linkedin.com") {
 			return t
 		}
 	}
-	// Fall back to any page tab
+	// 2. Fall back to any normal page tab
+	for _, t := range tabs {
+		if t.Type == "page" && t.WebSocketDebuggerURL != "" && !strings.HasPrefix(t.URL, "chrome://") {
+			return t
+		}
+	}
+	// 3. Any page tab with debugger URL
 	for _, t := range tabs {
 		if t.Type == "page" && t.WebSocketDebuggerURL != "" {
 			return t

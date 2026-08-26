@@ -6,7 +6,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -49,28 +51,49 @@ If Chrome is already open, it will notify you to restart Chrome with debugging e
 
 		Formatter.Info("Launching Google Chrome with remote debugging on port %d...", port)
 
-		// macOS launch command
-		c := exec.Command("open", "-a", "Google Chrome", "--args", fmt.Sprintf("--remote-debugging-port=%d", port))
-		if err := c.Run(); err != nil {
-			// Fallback direct binary execution
-			c2 := exec.Command("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		userDataDir := filepath.Join(os.Getenv("HOME"), ".ldin", "chrome_session")
+		_ = os.MkdirAll(userDataDir, 0755)
+
+		chromePaths := []string{
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		}
+
+		launched := false
+		for _, path := range chromePaths {
+			c := exec.Command(path,
 				fmt.Sprintf("--remote-debugging-port=%d", port),
+				fmt.Sprintf("--user-data-dir=%s", userDataDir),
+				"--no-first-run",
+				"--no-default-browser-check",
+				"https://www.linkedin.com",
 			)
-			if err2 := c2.Start(); err2 != nil {
-				return fmt.Errorf("failed launching Chrome: %w\n\nRun manually:\nopen -a 'Google Chrome' --args --remote-debugging-port=%d", err2, port)
+			if err := c.Start(); err == nil {
+				launched = true
+				break
 			}
 		}
 
+		if !launched {
+			c := exec.Command("open", "-a", "Google Chrome", "--args",
+				fmt.Sprintf("--remote-debugging-port=%d", port),
+				fmt.Sprintf("--user-data-dir=%s", userDataDir),
+				"https://www.linkedin.com",
+			)
+			_ = c.Start()
+		}
+
 		// Wait briefly and verify
-		time.Sleep(1500 * time.Millisecond)
+		time.Sleep(2000 * time.Millisecond)
 		tabs, err = cdp.ListTabs(flagBrowserHost, port)
 		if err == nil {
 			Formatter.Success("Google Chrome connected on port %d ✓", port)
-			Formatter.Info("Sign into linkedin.com in Chrome, then run: ldin profile show")
+			Formatter.Info("LinkedIn is opening in Chrome.")
+			Formatter.Info("Once you are logged into LinkedIn in that window, run: ldin profile show")
 		} else {
-			Formatter.Warning("Chrome launched. If already running, restart Chrome first:")
-			fmt.Printf("\n  1. Quit Chrome:  pkill -x 'Google Chrome'\n")
-			fmt.Printf("  2. Open Chrome:  open -a 'Google Chrome' --args --remote-debugging-port=%d\n\n", port)
+			Formatter.Warning("Chrome launched. If not connected, start with:")
+			fmt.Printf("\n  /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=%d --user-data-dir=\"%s\" https://www.linkedin.com &\n\n", port, userDataDir)
 		}
 
 		return nil

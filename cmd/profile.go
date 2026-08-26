@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -71,6 +72,11 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 			if err == nil {
 				defer bridge.Close()
 				Formatter.Info("CDP connected to Chrome tab: %s", tab.Title)
+				if strings.Contains(tab.Title, "Log In") || strings.Contains(tab.Title, "Sign In") || strings.Contains(tab.Title, "Sign Up") {
+					Formatter.Warning("LinkedIn login page detected in your Chrome browser.")
+					fmt.Printf("\n  👉 Please log in to LinkedIn in your Chrome window.\n  Once logged in, run `ldin profile show` again!\n\n")
+					return nil
+				}
 				profile, err := cdp.FetchFullProfileView(ctx, bridge, vanityName)
 				if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
 					return renderCDPProfile(profile)
