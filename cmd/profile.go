@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/santusht/ldin/internal/agent"
+	"github.com/santusht/ldin/internal/cdp"
+	"github.com/santusht/ldin/internal/linkedin"
 	"github.com/santusht/ldin/internal/output"
 	"github.com/santusht/ldin/internal/profilecode"
 )
@@ -49,74 +52,161 @@ var profileShowCmd = &cobra.Command{
 }
 
 func runProfileShow(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-	pac, err := LinkedInClient.ExportAsCode(ctx)
-	if err != nil {
-		// Fallback local profile if offline
-		pac = &profilecode.ProfileAsCode{
-			Name:     "Santusht Kotai",
-			Headline: "Software Engineer | Backend Engineering | Distributed Systems",
-			Location: "Indore, India",
-			About:    "Backend-focused Software Engineer passionate about scalable distributed systems and developer tooling.",
-			Skills:   []string{"Go", "Python", "FastAPI", "PostgreSQL", "Redis", "Docker", "Kubernetes"},
-			Experience: []profilecode.Experience{
-				{
-					Company:     "ShareXpress Systems",
-					Role:        "Software Engineer",
-					StartDate:   "2024-01",
-					EndDate:     "Present",
-					Current:     true,
-					Description: "Architecting high throughput microservices and open source developer platforms.",
-					SkillsUsed:  []string{"Go", "PostgreSQL", "Redis"},
-				},
-			},
-			Projects: []profilecode.Project{
-				{
-					Name:        "ldin",
-					Description: "GitHub CLI for LinkedIn with autonomous AI agent layer and Profile-as-Code.",
-					Technologies: []string{"Go", "OAuth2", "LinkedIn REST API"},
-				},
-			},
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	vanityName := ""
+	if creds, err := ConfigMgr.LoadProfile(AppCfg.ActiveProfile); err == nil {
+		vanityName = creds.VanityName
 	}
 
-	return Formatter.Print(pac, func() {
-		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile "))
-		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(pac.Name))
-		Formatter.PrintDivider(50)
-
-		fmt.Println(output.HeaderStyle.Render("Headline"))
-		fmt.Printf("  %s\n\n", pac.Headline)
-
-		if pac.Location != "" {
-			fmt.Println(output.HeaderStyle.Render("Location"))
-			fmt.Printf("  %s\n\n", pac.Location)
+	// --- Strategy 1: Chrome DevTools Protocol (real-time, bypasses TLS fingerprinting) ---
+	Formatter.Info("Connecting to Chrome CDP bridge for real-time data...")
+	tabs, cdpErr := cdp.ListTabs(cdp.DefaultCDPHost, cdp.DefaultCDPPort)
+	if cdpErr == nil {
+		tab := cdp.FindLinkedInTab(tabs)
+		if tab != nil {
+			bridge, err := cdp.Connect(ctx, tab)
+			if err == nil {
+				defer bridge.Close()
+				Formatter.Info("CDP connected → tab: %s", tab.Title)
+				profile, err := cdp.FetchFullProfileView(ctx, bridge, vanityName)
+				if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
+					return renderCDPProfile(profile)
+				}
+				Formatter.Warning("CDP fetch returned empty profile, trying direct Voyager...")
+			}
+		} else {
+			Formatter.Warning("No LinkedIn tab open in Chrome. Open linkedin.com in Chrome for best results.")
 		}
+	} else {
+		Formatter.Warning("Chrome CDP not available (start with: ldin browser launch). Trying Voyager API...")
+	}
 
+	// --- Strategy 2: Voyager API with session cookie ---
+	rich, voyagerErr := LinkedInClient.GetRichProfile(ctx)
+	if voyagerErr == nil && (rich.FirstName != "" || len(rich.Skills) > 0) {
+		return renderVoyagerProfile(rich)
+	}
+
+	// --- Strategy 3: Official OpenID userinfo (basic identity only) ---
+	Formatter.Warning("Voyager API blocked. Fetching basic identity via official OpenID API...")
+	basic, err := LinkedInClient.GetCurrentMemberProfile(ctx)
+	if err != nil {
+		return fmt.Errorf("all profile fetch strategies failed.\n\nTo get full real-time profile:\n  1. ldin browser launch\n  2. ldin profile show")
+	}
+
+	// Render basic identity
+	return Formatter.Print(basic, func() {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile (Basic — OpenID) "))
+		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(basic.Name))
+		Formatter.PrintDivider(50)
+		fmt.Println(output.HeaderStyle.Render("Headline"))
+		fmt.Printf("  %s\n\n", basic.Headline)
+		if basic.Location != "" {
+			fmt.Println(output.HeaderStyle.Render("Location"))
+			fmt.Printf("  %s\n\n", basic.Location)
+		}
+		fmt.Printf("\n  ℹ For full profile (skills, experience, education):\n  Run: ldin browser launch\n  Then: ldin profile show\n\n")
+	})
+}
+
+func renderCDPProfile(p *cdp.VoyagerProfile) error {
+	name := p.FirstName + " " + p.LastName
+	return Formatter.Print(p, func() {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile ✓ Live via Chrome "))
+		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(name))
+		if p.VanityName != "" {
+			fmt.Printf("  linkedin.com/in/%s\n", p.VanityName)
+		}
+		Formatter.PrintDivider(50)
+		renderProfileFields(p.Headline, p.Location, p.Summary, p.Skills, p.Experience, p.Education, p.Certifications, p.Languages)
+	})
+}
+
+func renderVoyagerProfile(p *linkedin.VoyagerProfileData) error {
+	name := p.FirstName + " " + p.LastName
+	return Formatter.Print(p, func() {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile (Live) "))
+		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(name))
+		if p.VanityName != "" {
+			fmt.Printf("  linkedin.com/in/%s\n", p.VanityName)
+		}
+		Formatter.PrintDivider(50)
+		renderProfileFields(p.Headline, p.Location, p.Summary, p.Skills, p.Experience, p.Education, p.Certifications, p.Languages)
+	})
+}
+
+func renderProfileFields(headline, location, summary string, skills []string, experience []profilecode.Experience, education []profilecode.Education, certs []profilecode.Certification, languages []string) {
+	if headline != "" {
+		fmt.Println(output.HeaderStyle.Render("Headline"))
+		fmt.Printf("  %s\n\n", headline)
+	}
+	if location != "" {
+		fmt.Println(output.HeaderStyle.Render("Location"))
+		fmt.Printf("  %s\n\n", location)
+	}
+	if summary != "" {
 		fmt.Println(output.HeaderStyle.Render("About"))
-		fmt.Printf("  %s\n\n", pac.About)
-
+		fmt.Printf("  %s\n\n", summary)
+	}
+	if len(skills) > 0 {
 		fmt.Println(output.HeaderStyle.Render("Skills"))
-		for _, s := range pac.Skills {
+		for _, s := range skills {
 			fmt.Printf("  • %s\n", s)
 		}
 		fmt.Println()
-
+	}
+	if len(experience) > 0 {
 		fmt.Println(output.HeaderStyle.Render("Experience"))
-		for _, exp := range pac.Experience {
-			dur := fmt.Sprintf("%s - %s", exp.StartDate, exp.EndDate)
-			fmt.Printf("  • %s at %s (%s)\n    %s\n", lipgloss.NewStyle().Bold(true).Render(exp.Role), exp.Company, dur, output.DimStyle.Render(exp.Description))
+		for _, e := range experience {
+			dr := e.StartDate
+			if e.EndDate != "" {
+				dr += " → " + e.EndDate
+			}
+			fmt.Printf("  • %s at %s", e.Role, e.Company)
+			if dr != "" {
+				fmt.Printf(" (%s)", dr)
+			}
+			fmt.Println()
+			if e.Description != "" {
+				fmt.Printf("    %s\n", e.Description)
+			}
 		}
 		fmt.Println()
-
-		if len(pac.Projects) > 0 {
-			fmt.Println(output.HeaderStyle.Render("Projects"))
-			for _, p := range pac.Projects {
-				fmt.Printf("  • %s: %s\n", lipgloss.NewStyle().Bold(true).Render(p.Name), output.DimStyle.Render(p.Description))
+	}
+	if len(education) > 0 {
+		fmt.Println(output.HeaderStyle.Render("Education"))
+		for _, ed := range education {
+			fmt.Printf("  • %s", ed.School)
+			if ed.Degree != "" {
+				fmt.Printf(" — %s", ed.Degree)
+			}
+			if ed.FieldOfStudy != "" {
+				fmt.Printf(" (%s)", ed.FieldOfStudy)
 			}
 			fmt.Println()
 		}
-	})
+		fmt.Println()
+	}
+	if len(certs) > 0 {
+		fmt.Println(output.HeaderStyle.Render("Certifications"))
+		for _, c := range certs {
+			fmt.Printf("  • %s", c.Name)
+			if c.IssuingOrg != "" {
+				fmt.Printf(" — %s", c.IssuingOrg)
+			}
+			fmt.Println()
+		}
+		fmt.Println()
+	}
+	if len(languages) > 0 {
+		fmt.Println(output.HeaderStyle.Render("Languages"))
+		for _, lang := range languages {
+			fmt.Printf("  • %s\n", lang)
+		}
+		fmt.Println()
+	}
 }
 
 var profileExportCmd = &cobra.Command{

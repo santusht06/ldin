@@ -23,6 +23,7 @@ type ProfileAsCode struct {
 	Education      []Education     `yaml:"education,omitempty" json:"education,omitempty"`
 	Projects       []Project       `yaml:"projects,omitempty" json:"projects,omitempty"`
 	Certifications []Certification `yaml:"certifications,omitempty" json:"certifications,omitempty"`
+	Languages      []string        `yaml:"languages,omitempty" json:"languages,omitempty"`
 	ContactInfo    *ContactInfo    `yaml:"contact_info,omitempty" json:"contact_info,omitempty"`
 }
 
