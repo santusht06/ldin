@@ -41,18 +41,20 @@ type AgentConfig struct {
 
 // ProfileCredentials represents an authenticated identity stored in ~/.ldin/profiles/<name>.json
 type ProfileCredentials struct {
-	Name         string   `json:"name"`
-	MemberID     string   `json:"member_id"`     // urn:li:person:xxxx
-	MemberURN    string   `json:"member_urn"`    // urn:li:person:xxxx
-	VanityName   string   `json:"vanity_name"`   // custom handle
-	DisplayName  string   `json:"display_name"`
-	Email        string   `json:"email"`
-	AccessToken  string   `json:"access_token"`
-	RefreshToken string   `json:"refresh_token,omitempty"`
-	ExpiresAt    int64    `json:"expires_at"`    // Unix timestamp
-	Scopes       []string `json:"scopes"`
-	ClientID     string   `json:"client_id,omitempty"`
-	ClientSecret string   `json:"client_secret,omitempty"`
+	Name          string   `json:"name"`
+	MemberID      string   `json:"member_id"`     // urn:li:person:xxxx
+	MemberURN     string   `json:"member_urn"`    // urn:li:person:xxxx
+	VanityName    string   `json:"vanity_name"`   // custom handle
+	DisplayName   string   `json:"display_name"`
+	Email         string   `json:"email"`
+	AccessToken   string   `json:"access_token"`
+	SessionCookie string   `json:"session_cookie,omitempty"` // li_at cookie
+	CSRFToken     string   `json:"csrf_token,omitempty"`     // JSESSIONID / ajax token
+	RefreshToken  string   `json:"refresh_token,omitempty"`
+	ExpiresAt     int64    `json:"expires_at"` // Unix timestamp
+	Scopes        []string `json:"scopes"`
+	ClientID      string   `json:"client_id,omitempty"`
+	ClientSecret  string   `json:"client_secret,omitempty"`
 }
 
 // ConfigManager handles loading and saving settings in ~/.ldin

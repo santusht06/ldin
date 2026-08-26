@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/santusht/ldin/internal/auth"
 	"github.com/santusht/ldin/internal/capabilities"
+	"github.com/santusht/ldin/internal/config"
 	"github.com/santusht/ldin/internal/output"
 )
 
@@ -24,13 +26,15 @@ var (
 	flagAuthName         string
 	flagAuthScopes       string
 	flagAuthBrowser      bool
+	flagAuthEmail        string
+	flagAuthPassword     string
 )
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Manage LinkedIn authentication, tokens, and multi-identity sessions",
-	Long: `Authenticate ldin with LinkedIn directly via access token or OAuth.
-Zero browser dependencies required by default — simply pass your token or export LINKEDIN_TOKEN.`,
+	Long: `Authenticate ldin with LinkedIn directly via access token, email/password credentials, or OAuth.
+Zero browser dependencies required by default — simply pass your token, enter email & password, or export LINKEDIN_TOKEN.`,
 }
 
 var authTokenCmd = &cobra.Command{
@@ -92,18 +96,62 @@ Example:
 
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate with LinkedIn (Direct token or optional browser OAuth)",
+	Short: "Authenticate with LinkedIn (Direct token, Email/Password, or optional browser)",
 	Long: `Authenticate ldin with LinkedIn.
-By default, prompts for token directly in terminal. Pass --browser for OAuth 2.0 PKCE browser flow.`,
+Examples:
+  ldin auth login --token <token>
+  ldin auth login --email user@example.com --password secret
+  ldin auth login --browser`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if !flagAuthBrowser && flagAuthToken == "" && len(args) == 0 {
-			return authTokenCmd.RunE(cmd, args)
+		profileName := flagAuthName
+		if profileName == "" {
+			profileName = "default"
 		}
-		if flagAuthToken != "" || len(args) > 0 {
+
+		// Option 1: Direct Email & Password terminal login
+		if flagAuthEmail != "" {
+			pwd := flagAuthPassword
+			if pwd == "" {
+				fmt.Print("Enter LinkedIn Password: ")
+				fmt.Scanln(&pwd)
+			}
+			Formatter.Info("Authenticating session with LinkedIn for %s...", flagAuthEmail)
+			ctx := context.Background()
+			sess, err := auth.LoginWithCredentials(ctx, flagAuthEmail, pwd)
+			if err != nil {
+				return err
+			}
+
+			creds := &config.ProfileCredentials{
+				Name:          profileName,
+				MemberURN:     sess.UserURN,
+				DisplayName:   sess.UserEmail,
+				Email:         sess.UserEmail,
+				AccessToken:   sess.LiAt,
+				SessionCookie: sess.LiAt,
+				CSRFToken:     sess.JSESSIONID,
+				ExpiresAt:     time.Now().Add(60 * 24 * time.Hour).Unix(),
+				Scopes:        auth.DefaultScopes,
+			}
+			err = ConfigMgr.SaveProfile(creds)
+			if err != nil {
+				return err
+			}
+
+			Formatter.Success("Successfully authenticated via session credentials for %s!", flagAuthEmail)
+			return nil
+		}
+
+		// Option 2: Direct Token
+		if flagAuthToken != "" || (!flagAuthBrowser && len(args) > 0) {
 			return authTokenCmd.RunE(cmd, args)
 		}
 
-		profileName := flagAuthName
+		if !flagAuthBrowser {
+			return authTokenCmd.RunE(cmd, args)
+		}
+
+		profileName = flagAuthName
 		if profileName == "" {
 			profileName = "default"
 		}
@@ -337,6 +385,8 @@ func init() {
 	authTokenCmd.Flags().StringVar(&flagAuthName, "name", "default", "Profile name alias")
 	authTokenCmd.Flags().StringVar(&flagAuthToken, "token", "", "Token string (or pass as first argument)")
 
+	authLoginCmd.Flags().StringVar(&flagAuthEmail, "email", "", "LinkedIn account email address")
+	authLoginCmd.Flags().StringVar(&flagAuthPassword, "password", "", "LinkedIn account password (prompted if omitted)")
 	authLoginCmd.Flags().StringVar(&flagAuthToken, "token", "", "Direct personal access token")
 	authLoginCmd.Flags().BoolVar(&flagAuthBrowser, "browser", false, "Launch interactive browser OAuth flow")
 	authLoginCmd.Flags().StringVar(&flagAuthClientID, "client-id", "", "LinkedIn App Client ID")

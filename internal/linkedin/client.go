@@ -159,7 +159,19 @@ func (c *Client) Request(ctx context.Context, method, endpoint string, query url
 	}
 
 	// Set standard LinkedIn REST API headers
-	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	if c.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.AccessToken)
+	}
+
+	if c.Profile != nil && c.Profile.SessionCookie != "" {
+		cookieStr := fmt.Sprintf("li_at=%s", c.Profile.SessionCookie)
+		if c.Profile.CSRFToken != "" {
+			cookieStr += fmt.Sprintf("; JSESSIONID=\"%s\"", c.Profile.CSRFToken)
+			req.Header.Set("Csrf-Token", c.Profile.CSRFToken)
+		}
+		req.Header.Set("Cookie", cookieStr)
+	}
+
 	req.Header.Set("Linkedin-Version", c.APIVersion)
 	req.Header.Set("X-Restli-Protocol-Version", "2.0.0")
 	req.Header.Set("Content-Type", "application/json")
