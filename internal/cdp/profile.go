@@ -125,7 +125,7 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
     // 2. Extract DOM details from active page if present
     const allDivs = Array.from(document.querySelectorAll('div, span, p, h1, h2, h3')).map(e => e.innerText?.trim()).filter(Boolean);
     for (const text of allDivs) {
-      if (!headline && (text.includes('OSC @the linux foundation') || (text.includes('Software Engineer') && text.includes('|') && text.length < 250))) {
+      if (!headline && text.includes('Software Engineer') && text.includes('|') && text.length < 250) {
         headline = text;
         break;
       }
@@ -133,7 +133,7 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
 
     let location = '';
     for (const text of allDivs) {
-      if ((text.includes('Indore') || text.includes('India')) && text.length < 80 && !text.includes('OSC') && !text.includes('Software') && !text.includes('Open to')) {
+      if ((text.includes('Indore') || text.includes('India')) && text.length < 80 && !text.includes('Software') && !text.includes('Open to')) {
         location = text;
         break;
       }
