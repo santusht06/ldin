@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/santusht/ldin/internal/output"
 )
 
 var (
@@ -93,11 +94,67 @@ Examples:
 	},
 }
 
+var apiVersionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show the active LinkedIn API version",
+	Long: `Display the active LinkedIn-Version header sent with all REST requests.
+LinkedIn uses monthly versioning (YYYYMM).
+
+To change the default API version:
+  ldin config set linkedin.version 202608`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ver := AppCfg.LinkedInAPIVersion
+		if ver == "" {
+			ver = "202608"
+		}
+		fmt.Println(output.TitleStyle.Render(" LinkedIn REST API Version "))
+		Formatter.PrintKeyValue("Active API Version", ver)
+		Formatter.PrintKeyValue("Header Sent", fmt.Sprintf("Linkedin-Version: %s", ver))
+		Formatter.PrintKeyValue("Protocol Version", "X-Restli-Protocol-Version: 2.0.0")
+		Formatter.PrintKeyValue("Base URL", "https://api.linkedin.com")
+		fmt.Printf("\n  To override for a single request:  ldin api GET /rest/... --version %s\n", ver)
+		fmt.Printf("  To change permanently:             ldin config set linkedin.version <YYYYMM>\n\n")
+		return nil
+	},
+}
+
+var apiVersionsCmd = &cobra.Command{
+	Use:   "versions",
+	Short: "List LinkedIn REST API versions and lifecycle status",
+	Long: `LinkedIn releases new API versions monthly using the YYYYMM format.
+Each API version is supported for 12 months from its release date.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn API Release Schedule "))
+		fmt.Println(output.DimStyle.Render("LinkedIn Versioning Policy: Monthly releases (YYYYMM), 12-month support window"))
+		fmt.Println()
+
+		rows := [][]string{
+			{"202608", "Active (Latest / Default)", "2026-08", "2027-08"},
+			{"202607", "Active", "2026-07", "2027-07"},
+			{"202606", "Active", "2026-06", "2027-06"},
+			{"202605", "Active", "2026-05", "2027-05"},
+			{"202604", "Active", "2026-04", "2027-04"},
+			{"202603", "Active", "2026-03", "2027-03"},
+			{"202602", "Active", "2026-02", "2027-02"},
+			{"202601", "Active", "2026-01", "2027-01"},
+			{"202512", "Maintenance", "2025-12", "2026-12"},
+			{"202511", "Maintenance", "2025-11", "2026-11"},
+		}
+
+		Formatter.PrintTable([]string{"Version (YYYYMM)", "Status", "Released", "End of Support"}, rows)
+		fmt.Printf("\n  Current default: 202608 (configured in ~/.ldin/config.yaml)\n\n")
+		return nil
+	},
+}
+
 func init() {
 	apiCmd.Flags().StringVarP(&flagAPIBody, "body", "b", "", "Request body JSON string or @file path")
 	apiCmd.Flags().StringSliceVarP(&flagAPIHeader, "header", "H", nil, "Custom HTTP headers (e.g. -H 'Key: Value')")
 	apiCmd.Flags().StringVarP(&flagAPIMethod, "method", "X", "", "HTTP method (GET, POST, PUT, PATCH, DELETE)")
 	apiCmd.Flags().StringVar(&flagAPIVersion, "version", "", "Custom Linkedin-Version header override")
+
+	apiCmd.AddCommand(apiVersionCmd)
+	apiCmd.AddCommand(apiVersionsCmd)
 
 	RootCmd.AddCommand(apiCmd)
 }

@@ -74,6 +74,15 @@ func NewClient(creds *config.ProfileCredentials, apiVersion string) *Client {
 		APIVersion:  apiVersion,
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if strings.Contains(req.URL.Path, "login") || (len(via) > 0 && req.URL.Host != via[0].URL.Host) {
+					return fmt.Errorf("authentication failed: access token expired or invalid (redirected to %s)", req.URL.Path)
+				}
+				if len(via) >= 5 {
+					return fmt.Errorf("stopped after 5 redirects")
+				}
+				return nil
+			},
 		},
 		Profile: creds,
 	}
