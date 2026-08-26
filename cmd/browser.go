@@ -23,15 +23,14 @@ var (
 
 var browserCmd = &cobra.Command{
 	Use:   "browser",
-	Short: "Chrome DevTools Protocol bridge — control LinkedIn via your regular Chrome browser",
-	Long: `ldin browser connects to your regular Google Chrome browser via Chrome DevTools Protocol (CDP).
-This gives ldin full access to your logged-in LinkedIn session with genuine TLS fingerprints,
-bypassing all bot-detection mechanisms.
+	Short: "Browser session integration for capabilities unavailable via official API (Experimental)",
+	Long: `ldin browser is an experimental bridge that connects to your local Chrome browser
+for capabilities and insights unavailable through the official LinkedIn Developer REST APIs.
 
 Commands:
   ldin browser launch     Launch Google Chrome with CDP remote debugging enabled
-  ldin browser status     Check connection to your regular Chrome browser
-  ldin browser test       Test fetching real-time data from your active LinkedIn tab`,
+  ldin browser status     Check connection to your local Chrome browser
+  ldin browser test       Test communication with your active LinkedIn tab`,
 }
 
 var browserLaunchCmd = &cobra.Command{

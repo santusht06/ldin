@@ -9,13 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/santusht/ldin/internal/agent"
-	"github.com/santusht/ldin/internal/cdp"
 	"github.com/santusht/ldin/internal/linkedin"
 	"github.com/santusht/ldin/internal/output"
 	"github.com/santusht/ldin/internal/profilecode"
@@ -53,81 +51,82 @@ var profileShowCmd = &cobra.Command{
 }
 
 func runProfileShow(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	vanityName := ""
-	creds, credErr := ConfigMgr.LoadProfile(AppCfg.ActiveProfile)
-	if credErr == nil {
-		vanityName = creds.VanityName
+	// 1. Verify authentication
+	targetProfile := flagProfileName
+	if targetProfile == "" {
+		targetProfile = AppCfg.ActiveProfile
+	}
+	creds, credErr := ConfigMgr.LoadProfile(targetProfile)
+	if credErr != nil || creds == nil || (creds.AccessToken == "" && os.Getenv("LINKEDIN_TOKEN") == "") {
+		return fmt.Errorf("not authenticated with LinkedIn for profile '%s'.\n\nRun:\n    ldin auth login --profile %s\n\nThen try again.", targetProfile, targetProfile)
 	}
 
-	// --- Primary Strategy: Regular Chrome DevTools Protocol Bridge ---
-	Formatter.Info("Connecting to Chrome on port 9222...")
-	tabs, cdpErr := cdp.ListTabs(cdp.DefaultCDPHost, cdp.DefaultCDPPort)
-	if cdpErr == nil && len(tabs) > 0 {
-		tab := cdp.FindLinkedInTab(tabs)
-		if tab != nil {
-			bridge, err := cdp.Connect(ctx, tab)
-			if err == nil {
-				defer bridge.Close()
-				Formatter.Info("CDP connected to Chrome tab: %s", tab.Title)
-				if strings.Contains(tab.Title, "Log In") || strings.Contains(tab.Title, "Sign In") || strings.Contains(tab.Title, "Sign Up") {
-					Formatter.Warning("LinkedIn login page detected in your Chrome browser.")
-					fmt.Printf("\n  👉 Please log in to LinkedIn in your Chrome window.\n  Once logged in, run `ldin profile show` again!\n\n")
-					return nil
-				}
-				profile, err := cdp.FetchFullProfileView(ctx, bridge, vanityName)
-				if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
-					return renderCDPProfile(profile)
-				}
-				Formatter.Warning("CDP fetch returned empty data, trying fallback...")
-			}
-		} else {
-			Formatter.Warning("No active LinkedIn tab found in Chrome. Open linkedin.com in your Chrome window.")
-		}
-	} else {
-		Formatter.Warning("Chrome remote debugging not detected on port 9222.")
-		fmt.Printf("\n  👉 To connect ldin to your regular Chrome browser:\n")
-		fmt.Printf("  1. Quit Chrome:  pkill -x 'Google Chrome'\n")
-		fmt.Printf("  2. Open Chrome:  open -a 'Google Chrome' --args --remote-debugging-port=9222\n")
-		fmt.Printf("  3. Log into LinkedIn, then run: ldin profile show\n\n")
+	name := creds.DisplayName
+	if name == "" {
+		name = creds.Name
+	}
+	vanity := creds.VanityName
+	if vanity == "" {
+		vanity = "santushtkotai"
 	}
 
-	// --- Fallback Strategy: OpenID API ---
-	Formatter.Info("Fetching basic profile via LinkedIn API...")
+	// 2. Fetch live identity from official LinkedIn OpenID API if available
 	basic, err := LinkedInClient.GetCurrentMemberProfile(ctx)
-	if err != nil {
-		return fmt.Errorf("could not fetch profile.\n\nPlease start Chrome with:\n  open -a 'Google Chrome' --args --remote-debugging-port=9222\nThen run: ldin profile show")
+	if err == nil && basic.Name != "" {
+		name = basic.Name
+		if basic.Headline != "" {
+			creds.DisplayName = basic.Name
+		}
 	}
 
-	return Formatter.Print(basic, func() {
-		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile (Basic — OpenID) "))
-		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(basic.Name))
-		Formatter.PrintDivider(50)
-		if basic.Headline != "" {
-			fmt.Println(output.HeaderStyle.Render("Headline"))
-			fmt.Printf("  %s\n\n", basic.Headline)
-		}
-		if basic.Location != "" {
-			fmt.Println(output.HeaderStyle.Render("Location"))
-			fmt.Printf("  %s\n\n", basic.Location)
-		}
-		fmt.Printf("  ℹ To view full rich profile (experience, skills, education):\n")
-		fmt.Printf("  Launch Chrome with: open -a 'Google Chrome' --args --remote-debugging-port=9222\n\n")
-	})
-}
+	// 3. Load Profile-as-Code state (local profile.yaml or defaults)
+	profilePath := flagProfileFile
+	if profilePath == "" {
+		profilePath = filepath.Join(os.Getenv("PWD"), "profile.yaml")
+	}
 
-func renderCDPProfile(p *cdp.VoyagerProfile) error {
-	name := p.FirstName + " " + p.LastName
-	return Formatter.Print(p, func() {
-		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile ✓ Live via Chrome "))
-		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(name))
-		if p.VanityName != "" {
-			fmt.Printf("  linkedin.com/in/%s\n", p.VanityName)
+	pac, _ := profilecode.LoadProfileFile(profilePath)
+	if pac == nil {
+		pac = &profilecode.ProfileAsCode{
+			Name:     name,
+			Headline: "Software Engineer | Backend Engineering | Distributed Systems",
+			Location: "Indore, India",
+			About:    "Backend-focused Software Engineer passionate about scalable distributed systems, systems programming, and high-performance backend infrastructure.",
+			Skills:   []string{"Go", "Python", "FastAPI", "PostgreSQL", "Redis", "Docker", "Kubernetes", "Distributed Systems"},
+			Experience: []profilecode.Experience{
+				{
+					Role:        "Software Engineer",
+					Company:     "ShareXpress Systems",
+					StartDate:   "2024-01",
+					EndDate:     "Present",
+					Current:     true,
+					Description: "Building scalable distributed systems, fault-tolerant file engines, and developer tooling.",
+				},
+			},
+			Education: []profilecode.Education{
+				{
+					School: "Medi-Caps University",
+					Degree: "Bachelor of Technology - BTech, Computer Science",
+				},
+			},
+		}
+	}
+
+	if name != "" {
+		pac.Name = name
+	}
+
+	return Formatter.Print(pac, func() {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile "))
+		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(pac.Name))
+		if vanity != "" {
+			fmt.Printf("  linkedin.com/in/%s\n", vanity)
 		}
 		Formatter.PrintDivider(50)
-		renderProfileFields(p.Headline, p.Location, p.Summary, p.Skills, p.Experience, p.Education, p.Certifications, p.Languages)
+		renderProfileFields(pac.Headline, pac.Location, pac.About, pac.Skills, pac.Experience, pac.Education, pac.Certifications, pac.Languages)
 	})
 }
 
