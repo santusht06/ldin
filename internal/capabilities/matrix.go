@@ -195,6 +195,28 @@ var Registry = []Capability{
 		DocsURL:     "https://learn.microsoft.com/en-us/linkedin/marketing/integrations/events-management",
 	},
 
+	// Messaging & DMs
+	{
+		ID:          "messaging.dms",
+		Name:        "1-to-1 Direct Messages & InMail",
+		Category:    "Messaging",
+		Description: "Read member private message threads and send InMail messages",
+		RequiredScopes: []string{"r_messages", "w_messages"},
+		Tier:        TierEnterprise,
+		DocsURL:     "https://learn.microsoft.com/en-us/linkedin/talent/integrations/recruiter/1-1-messaging",
+	},
+
+	// Network & Connections
+	{
+		ID:          "network.connections",
+		Name:        "Member Connections & 1st-Degree Network",
+		Category:    "Network",
+		Description: "Read member connection lists and network relationships",
+		RequiredScopes: []string{"r_network"},
+		Tier:        TierEnterprise,
+		DocsURL:     "https://learn.microsoft.com/en-us/linkedin/consumer/integrations/self-serve/sign-in-with-linkedin",
+	},
+
 	// Advertising
 	{
 		ID:          "ads.campaigns",
