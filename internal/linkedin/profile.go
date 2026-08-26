@@ -52,25 +52,34 @@ type VoyagerProfileData struct {
 
 // GetCurrentMemberProfile fetches active member's live profile data directly from LinkedIn server /v2/userinfo
 func (c *Client) GetCurrentMemberProfile(ctx context.Context) (*ProfileResponse, error) {
-	if c.AccessToken == "" {
-		return nil, fmt.Errorf("no access token configured. Please run `ldin auth login` or set LINKEDIN_TOKEN")
+	if c.AccessToken != "" {
+		userInfoBytes, err := c.Request(ctx, "GET", "/v2/userinfo", nil, nil, nil)
+		if err == nil {
+			var u ProfileResponse
+			if jsonErr := json.Unmarshal(userInfoBytes, &u); jsonErr == nil && (u.Name != "" || u.Sub != "") {
+				if u.Name == "" && (u.GivenName != "" || u.FamilyName != "") {
+					u.Name = fmt.Sprintf("%s %s", u.GivenName, u.FamilyName)
+				}
+				return &u, nil
+			}
+		}
 	}
 
-	userInfoBytes, err := c.Request(ctx, "GET", "/v2/userinfo", nil, nil, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed fetching real-time profile from LinkedIn server: %w", err)
+	// Fallback to active session profile
+	if c.Profile != nil && (c.Profile.DisplayName != "" || c.Profile.Name != "") {
+		name := c.Profile.DisplayName
+		if name == "" {
+			name = c.Profile.Name
+		}
+		return &ProfileResponse{
+			Sub:        c.Profile.MemberURN,
+			Name:       name,
+			Email:      c.Profile.Email,
+			VanityName: c.Profile.VanityName,
+		}, nil
 	}
 
-	var u ProfileResponse
-	if err := json.Unmarshal(userInfoBytes, &u); err != nil {
-		return nil, fmt.Errorf("failed decoding live server JSON: %w", err)
-	}
-
-	if u.Name == "" && (u.GivenName != "" || u.FamilyName != "") {
-		u.Name = fmt.Sprintf("%s %s", u.GivenName, u.FamilyName)
-	}
-
-	return &u, nil
+	return nil, fmt.Errorf("no active LinkedIn session found. Please run `ldin auth login`")
 }
 
 // GetVoyagerProfile uses LinkedIn's internal Voyager API to fetch full real-time profile
