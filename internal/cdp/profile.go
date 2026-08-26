@@ -83,60 +83,71 @@ func FetchSkills(ctx context.Context, bridge *Bridge, vanityName string) ([]stri
 	return skills, nil
 }
 
-// FetchFullProfileView fetches the complete rich profile using the profileView endpoint via Chrome CDP
+// FetchFullProfileView fetches the complete rich profile using all modern LinkedIn Voyager endpoints via Chrome CDP
 func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string) (*VoyagerProfile, error) {
-	// This runs INSIDE regular Chrome, using the user's active session & real TLS
 	js := fmt.Sprintf(`
 (async () => {
   try {
     const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || '';
+    const headers = {
+      'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+      'X-Li-Lang': 'en_US',
+      'X-Requested-With': 'XMLHttpRequest',
+      'Csrf-Token': csrf,
+    };
+
+    // 1. Fetch current user identity from /voyager/api/me
+    let meData = null;
+    try {
+      const r = await fetch('https://www.linkedin.com/voyager/api/me', { credentials: 'include', headers });
+      if (r.ok) meData = await r.json();
+    } catch(e) {}
 
     let vn = %q;
-    // If no vanityName specified, query /voyager/api/me to find the logged-in user
-    if (!vn) {
+    if (!vn && meData && meData.included) {
+      const meInc = meData.included.find(i => i.publicIdentifier || i.plainId) || meData.included[0];
+      vn = (meInc && meInc.publicIdentifier) || meData.plainId || '';
+    }
+
+    // 2. Query rich profile endpoints
+    const profileEndpoints = [
+      '/voyager/api/identity/dash/profiles?q=vanityName&vanityName=' + vn,
+      '/voyager/api/identity/profiles/' + vn + '/profileView',
+      '/voyager/api/identity/profiles/' + vn,
+    ];
+
+    let profileData = null;
+    for (const ep of profileEndpoints) {
       try {
-        const meResp = await fetch('https://www.linkedin.com/voyager/api/me', {
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/vnd.linkedin.normalized+json+2.1',
-            'X-Li-Lang': 'en_US',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Csrf-Token': csrf,
-          }
-        });
-        if (meResp.ok) {
-          const meData = await meResp.json();
-          const meInc = (meData.included || [])[0];
-          vn = (meInc && meInc.publicIdentifier) || meData.plainId || '';
+        const r = await fetch('https://www.linkedin.com' + ep, { credentials: 'include', headers });
+        if (r.ok) {
+          profileData = await r.json();
+          break;
         }
       } catch(e) {}
     }
 
-    const endpoints = [
-      '/voyager/api/identity/dash/profiles?q=vanityName&vanityName=' + vn,
-      '/voyager/api/identity/profiles/' + vn + '/profileView',
-      '/voyager/api/identity/profiles/' + vn,
-      '/voyager/api/me',
-    ];
+    // 3. Query skills
+    let skillsData = null;
+    try {
+      const r = await fetch('https://www.linkedin.com/voyager/api/identity/profiles/' + vn + '/skills', { credentials: 'include', headers });
+      if (r.ok) skillsData = await r.json();
+    } catch(e) {}
 
-    for (const ep of endpoints) {
-      try {
-        const resp = await fetch('https://www.linkedin.com' + ep, {
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/vnd.linkedin.normalized+json+2.1',
-            'X-Li-Lang': 'en_US',
-            'X-Requested-With': 'XMLHttpRequest',
-            'Csrf-Token': csrf,
-          }
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          return JSON.stringify({status: resp.status, endpoint: ep, data: data, vanityName: vn});
-        }
-      } catch(e) { continue; }
-    }
-    return JSON.stringify({error: 'all endpoints failed'});
+    // 4. Query positions (experience)
+    let positionsData = null;
+    try {
+      const r = await fetch('https://www.linkedin.com/voyager/api/identity/profiles/' + vn + '/positionGroupViews', { credentials: 'include', headers });
+      if (r.ok) positionsData = await r.json();
+    } catch(e) {}
+
+    return JSON.stringify({
+      vanityName: vn,
+      me: meData,
+      profile: profileData,
+      skills: skillsData,
+      positions: positionsData,
+    });
   } catch(e) {
     return JSON.stringify({error: e.toString()});
   }
@@ -148,31 +159,39 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
 		return nil, fmt.Errorf("CDP eval failed: %w", err)
 	}
 
-	var wrapper struct {
-		Status     int                    `json:"status"`
-		Endpoint   string                 `json:"endpoint"`
+	var combined struct {
 		VanityName string                 `json:"vanityName"`
-		Data       map[string]interface{} `json:"data"`
+		Me         map[string]interface{} `json:"me"`
+		Profile    map[string]interface{} `json:"profile"`
+		Skills     map[string]interface{} `json:"skills"`
+		Positions  map[string]interface{} `json:"positions"`
 		Error      string                 `json:"error"`
 	}
-	if err := json.Unmarshal([]byte(result), &wrapper); err != nil {
+	if err := json.Unmarshal([]byte(result), &combined); err != nil {
 		return nil, fmt.Errorf("failed parsing CDP result: %w", err)
 	}
-	if wrapper.Error != "" {
-		return nil, fmt.Errorf("LinkedIn returned error: %s", wrapper.Error)
+	if combined.Error != "" {
+		return nil, fmt.Errorf("LinkedIn returned error: %s", combined.Error)
 	}
 
 	finalVanity := vanityName
 	if finalVanity == "" {
-		finalVanity = wrapper.VanityName
+		finalVanity = combined.VanityName
 	}
 
 	profile := &VoyagerProfile{VanityName: finalVanity}
-	parseProfileData(wrapper.Data, profile)
 
-	if len(profile.Skills) == 0 && finalVanity != "" {
-		skills, _ := FetchSkills(ctx, bridge, finalVanity)
-		profile.Skills = skills
+	if combined.Me != nil {
+		parseProfileData(combined.Me, profile)
+	}
+	if combined.Profile != nil {
+		parseProfileData(combined.Profile, profile)
+	}
+	if combined.Skills != nil {
+		parseProfileData(combined.Skills, profile)
+	}
+	if combined.Positions != nil {
+		parseProfileData(combined.Positions, profile)
 	}
 
 	return profile, nil
@@ -180,81 +199,93 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
 
 // parseProfileData walks the raw Voyager JSON and extracts profile fields
 func parseProfileData(raw map[string]interface{}, profile *VoyagerProfile) {
-	// Try top-level fields first (simple profile endpoint)
-	if fn, ok := raw["firstName"].(string); ok && fn != "" {
-		profile.FirstName = fn
-	}
-	if ln, ok := raw["lastName"].(string); ok && ln != "" {
-		profile.LastName = ln
-	}
-	if h, ok := raw["headline"].(string); ok && h != "" {
-		profile.Headline = h
-	}
-	if s, ok := raw["summary"].(string); ok && s != "" {
-		profile.Summary = s
-	}
-	if vn, ok := raw["vanityName"].(string); ok && vn != "" {
-		profile.VanityName = vn
-	}
-
-	// Parse geo location
-	if geo, ok := raw["geoLocation"].(map[string]interface{}); ok {
-		if geo2, ok := geo["geo"].(map[string]interface{}); ok {
-			if name, ok := geo2["defaultLocalizedName"].(string); ok {
-				profile.Location = name
+	extractString := func(m map[string]interface{}, keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k].(string); ok && v != "" {
+				return v
+			}
+			if obj, ok := m[k].(map[string]interface{}); ok {
+				if txt, ok := obj["text"].(string); ok && txt != "" {
+					return txt
+				}
+				for _, sub := range obj {
+					if s, ok := sub.(string); ok && s != "" {
+						return s
+					}
+				}
 			}
 		}
-	}
-	if profile.Location == "" {
-		if locName, ok := raw["locationName"].(string); ok {
-			profile.Location = locName
-		}
+		return ""
 	}
 
-	// Walk `included` array for richer profileView format
-	included, _ := raw["included"].([]interface{})
-	for _, item := range included {
+	// Try top-level fields
+	if fn := extractString(raw, "firstName", "multiLocaleFirstName"); fn != "" {
+		profile.FirstName = fn
+	}
+	if ln := extractString(raw, "lastName", "multiLocaleLastName"); ln != "" {
+		profile.LastName = ln
+	}
+	if h := extractString(raw, "headline", "multiLocaleHeadline"); h != "" {
+		profile.Headline = h
+	}
+	if s := extractString(raw, "summary", "multiLocaleSummary"); s != "" {
+		profile.Summary = s
+	}
+	if vn := extractString(raw, "vanityName", "publicIdentifier"); vn != "" {
+		profile.VanityName = vn
+	}
+	if loc := extractString(raw, "locationName", "defaultLocalizedName"); loc != "" {
+		profile.Location = loc
+	}
+
+	// Walk `included` and `elements` array for rich profile objects
+	var items []interface{}
+	if inc, ok := raw["included"].([]interface{}); ok {
+		items = append(items, inc...)
+	}
+	if el, ok := raw["elements"].([]interface{}); ok {
+		items = append(items, el...)
+	}
+
+	for _, item := range items {
 		m, ok := item.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		typeStr, _ := m["$type"].(string)
 
-		if strings.Contains(typeStr, "MiniProfile") || strings.Contains(typeStr, "com.linkedin.voyager.identity.profile.Profile") {
-			if fn, ok := m["firstName"].(string); ok && fn != "" {
+		if strings.Contains(typeStr, "Profile") || strings.Contains(typeStr, "MiniProfile") {
+			if fn := extractString(m, "firstName", "multiLocaleFirstName"); fn != "" {
 				profile.FirstName = fn
 			}
-			if ln, ok := m["lastName"].(string); ok && ln != "" {
+			if ln := extractString(m, "lastName", "multiLocaleLastName"); ln != "" {
 				profile.LastName = ln
 			}
-			if h, ok := m["headline"].(string); ok && h != "" {
+			if h := extractString(m, "headline", "multiLocaleHeadline"); h != "" {
 				profile.Headline = h
 			}
-			if s, ok := m["summary"].(string); ok && s != "" {
+			if s := extractString(m, "summary", "multiLocaleSummary"); s != "" {
 				profile.Summary = s
 			}
-			if vn, ok := m["vanityName"].(string); ok && vn != "" {
+			if vn := extractString(m, "vanityName", "publicIdentifier"); vn != "" {
 				profile.VanityName = vn
+			}
+			if loc := extractString(m, "locationName", "defaultLocalizedName"); loc != "" {
+				profile.Location = loc
 			}
 		}
 
 		if strings.Contains(typeStr, "Skill") {
-			if name, ok := m["name"].(string); ok && name != "" {
+			if name := extractString(m, "name"); name != "" {
 				profile.Skills = appendUnique(profile.Skills, name)
 			}
 		}
 
 		if strings.Contains(typeStr, "Position") {
 			exp := profilecode.Experience{}
-			if title, ok := m["title"].(string); ok {
-				exp.Role = title
-			}
-			if comp, ok := m["companyName"].(string); ok {
-				exp.Company = comp
-			}
-			if desc, ok := m["description"].(string); ok {
-				exp.Description = desc
-			}
+			exp.Role = extractString(m, "title")
+			exp.Company = extractString(m, "companyName")
+			exp.Description = extractString(m, "description")
 			parseDateRange(m, &exp)
 			if exp.Role != "" || exp.Company != "" {
 				profile.Experience = append(profile.Experience, exp)
@@ -263,15 +294,9 @@ func parseProfileData(raw map[string]interface{}, profile *VoyagerProfile) {
 
 		if strings.Contains(typeStr, "Education") {
 			edu := profilecode.Education{}
-			if school, ok := m["schoolName"].(string); ok {
-				edu.School = school
-			}
-			if degree, ok := m["degreeName"].(string); ok {
-				edu.Degree = degree
-			}
-			if field, ok := m["fieldOfStudy"].(string); ok {
-				edu.FieldOfStudy = field
-			}
+			edu.School = extractString(m, "schoolName", "school")
+			edu.Degree = extractString(m, "degreeName", "degree")
+			edu.FieldOfStudy = extractString(m, "fieldOfStudy", "fieldsOfStudy")
 			if edu.School != "" {
 				profile.Education = append(profile.Education, edu)
 			}
@@ -279,19 +304,15 @@ func parseProfileData(raw map[string]interface{}, profile *VoyagerProfile) {
 
 		if strings.Contains(typeStr, "Certification") {
 			cert := profilecode.Certification{}
-			if name, ok := m["name"].(string); ok {
-				cert.Name = name
-			}
-			if issuer, ok := m["authority"].(string); ok {
-				cert.IssuingOrg = issuer
-			}
+			cert.Name = extractString(m, "name")
+			cert.IssuingOrg = extractString(m, "authority", "issuingAuthority")
 			if cert.Name != "" {
 				profile.Certifications = append(profile.Certifications, cert)
 			}
 		}
 
 		if strings.Contains(typeStr, "Language") {
-			if name, ok := m["name"].(string); ok && name != "" {
+			if name := extractString(m, "name"); name != "" {
 				profile.Languages = appendUnique(profile.Languages, name)
 			}
 		}
