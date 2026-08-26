@@ -68,7 +68,7 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 	Formatter.Info("Querying live profile from LinkedIn server...")
 	profile, err := LinkedInClient.GetCurrentMemberProfile(ctx)
 	if err != nil {
-		return fmt.Errorf("failed fetching real-time profile from LinkedIn server: %w", err)
+		return err
 	}
 
 	// 3. Render real-time server JSON response

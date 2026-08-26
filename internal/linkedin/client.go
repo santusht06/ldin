@@ -75,13 +75,7 @@ func NewClient(creds *config.ProfileCredentials, apiVersion string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if strings.Contains(req.URL.Path, "login") || (len(via) > 0 && req.URL.Host != via[0].URL.Host) {
-					return fmt.Errorf("authentication failed: access token expired or invalid (redirected to %s)", req.URL.Path)
-				}
-				if len(via) >= 5 {
-					return fmt.Errorf("stopped after 5 redirects")
-				}
-				return nil
+				return http.ErrUseLastResponse
 			},
 		},
 		Profile: creds,
@@ -206,7 +200,14 @@ func (c *Client) Request(ctx context.Context, method, endpoint string, query url
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusSeeOther || resp.StatusCode == http.StatusTemporaryRedirect {
+			return nil, &APIError{
+				StatusCode: resp.StatusCode,
+				Message:    "LinkedIn authentication required (unauthorized or session expired)",
+				Hint:       "Run `ldin auth login` or set a valid LINKEDIN_TOKEN",
+			}
+		}
 		return nil, c.handleErrorResponse(resp.StatusCode, respBody, endpoint)
 	}
 
