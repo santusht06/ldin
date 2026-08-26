@@ -1,0 +1,21 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts & coverage
+*.out
+*.test
+profile.yaml
+
+# Local config & profiles (prevent leaking tokens)
+.ldin/
+
+# OS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
