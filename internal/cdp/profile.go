@@ -83,17 +83,40 @@ func FetchSkills(ctx context.Context, bridge *Bridge, vanityName string) ([]stri
 	return skills, nil
 }
 
-// FetchFullProfileView fetches the complete rich profile using the profileView endpoint via CDP
+// FetchFullProfileView fetches the complete rich profile using the profileView endpoint via Chrome CDP
 func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string) (*VoyagerProfile, error) {
-	// This runs INSIDE Chrome, so LinkedIn sees it as a real browser request
+	// This runs INSIDE regular Chrome, using the user's active session & real TLS
 	js := fmt.Sprintf(`
 (async () => {
   try {
     const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || '';
+
+    let vn = %q;
+    // If no vanityName specified, query /voyager/api/me to find the logged-in user
+    if (!vn) {
+      try {
+        const meResp = await fetch('https://www.linkedin.com/voyager/api/me', {
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+            'X-Li-Lang': 'en_US',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Csrf-Token': csrf,
+          }
+        });
+        if (meResp.ok) {
+          const meData = await meResp.json();
+          const meInc = (meData.included || [])[0];
+          vn = (meInc && meInc.publicIdentifier) || meData.plainId || '';
+        }
+      } catch(e) {}
+    }
+
     const endpoints = [
-      '/voyager/api/identity/profiles/%s/profileView',
-      '/voyager/api/identity/profiles/%s',
-      '/voyager/api/identity/dash/profiles?q=vanityName&vanityName=%s',
+      '/voyager/api/identity/dash/profiles?q=vanityName&vanityName=' + vn,
+      '/voyager/api/identity/profiles/' + vn + '/profileView',
+      '/voyager/api/identity/profiles/' + vn,
+      '/voyager/api/me',
     ];
 
     for (const ep of endpoints) {
@@ -109,7 +132,7 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
         });
         if (resp.ok) {
           const data = await resp.json();
-          return JSON.stringify({status: resp.status, endpoint: ep, data: data});
+          return JSON.stringify({status: resp.status, endpoint: ep, data: data, vanityName: vn});
         }
       } catch(e) { continue; }
     }
@@ -118,7 +141,7 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
     return JSON.stringify({error: e.toString()});
   }
 })()
-`, vanityName, vanityName, vanityName)
+`, vanityName)
 
 	result, err := bridge.Eval(ctx, js)
 	if err != nil {
@@ -126,10 +149,11 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
 	}
 
 	var wrapper struct {
-		Status   int                    `json:"status"`
-		Endpoint string                 `json:"endpoint"`
-		Data     map[string]interface{} `json:"data"`
-		Error    string                 `json:"error"`
+		Status     int                    `json:"status"`
+		Endpoint   string                 `json:"endpoint"`
+		VanityName string                 `json:"vanityName"`
+		Data       map[string]interface{} `json:"data"`
+		Error      string                 `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(result), &wrapper); err != nil {
 		return nil, fmt.Errorf("failed parsing CDP result: %w", err)
@@ -138,11 +162,16 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
 		return nil, fmt.Errorf("LinkedIn returned error: %s", wrapper.Error)
 	}
 
-	profile := &VoyagerProfile{VanityName: vanityName}
+	finalVanity := vanityName
+	if finalVanity == "" {
+		finalVanity = wrapper.VanityName
+	}
+
+	profile := &VoyagerProfile{VanityName: finalVanity}
 	parseProfileData(wrapper.Data, profile)
 
-	if len(profile.Skills) == 0 {
-		skills, _ := FetchSkills(ctx, bridge, vanityName)
+	if len(profile.Skills) == 0 && finalVanity != "" {
+		skills, _ := FetchSkills(ctx, bridge, finalVanity)
 		profile.Skills = skills
 	}
 

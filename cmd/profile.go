@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/santusht/ldin/internal/agent"
-	"github.com/santusht/ldin/internal/browser"
 	"github.com/santusht/ldin/internal/cdp"
 	"github.com/santusht/ldin/internal/linkedin"
 	"github.com/santusht/ldin/internal/output"
@@ -53,7 +52,7 @@ var profileShowCmd = &cobra.Command{
 }
 
 func runProfileShow(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
 	vanityName := ""
@@ -62,62 +61,38 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 		vanityName = creds.VanityName
 	}
 
-	// --- Strategy 0: Headless Chromium (no GUI, fully terminal, bypasses JA3) ---
-	if credErr == nil && creds.SessionCookie != "" {
-		Formatter.Info("Launching headless Chromium...")
-		hb, err := browser.Launch(ctx)
-		if err == nil {
-			defer hb.Close()
-			if injectErr := hb.InjectSession(creds.SessionCookie, creds.CSRFToken); injectErr == nil {
-				if openErr := hb.OpenPage(ctx, "https://www.linkedin.com"); openErr == nil {
-					if vanityName == "" {
-						vanityName, _, _ = hb.GetCurrentUser(ctx)
-					}
-					profile, err := hb.FetchVoyagerProfile(ctx, vanityName)
-					if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
-						Formatter.Success("Profile fetched via headless Chromium ✓")
-						return renderCDPProfile(profile)
-					}
-					Formatter.Warning("Headless fetch returned empty data, trying CDP bridge...")
-				}
-			}
-		} else {
-			Formatter.Warning("Headless Chromium not set up (run: ldin browser setup). Trying CDP bridge...")
-		}
-	}
-
-	// --- Strategy 1: CDP Bridge (existing Chrome window) ---
-	Formatter.Info("Checking Chrome CDP bridge on port 9222...")
+	// --- Primary Strategy: Regular Chrome DevTools Protocol Bridge ---
+	Formatter.Info("Connecting to Chrome on port 9222...")
 	tabs, cdpErr := cdp.ListTabs(cdp.DefaultCDPHost, cdp.DefaultCDPPort)
-	if cdpErr == nil {
+	if cdpErr == nil && len(tabs) > 0 {
 		tab := cdp.FindLinkedInTab(tabs)
 		if tab != nil {
 			bridge, err := cdp.Connect(ctx, tab)
 			if err == nil {
 				defer bridge.Close()
-				Formatter.Info("CDP connected → %s", tab.Title)
+				Formatter.Info("CDP connected to Chrome tab: %s", tab.Title)
 				profile, err := cdp.FetchFullProfileView(ctx, bridge, vanityName)
 				if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
 					return renderCDPProfile(profile)
 				}
+				Formatter.Warning("CDP fetch returned empty data, trying fallback...")
 			}
 		} else {
-			Formatter.Warning("No LinkedIn tab in Chrome — open linkedin.com in Chrome for best results")
+			Formatter.Warning("No active LinkedIn tab found in Chrome. Open linkedin.com in your Chrome window.")
 		}
+	} else {
+		Formatter.Warning("Chrome remote debugging not detected on port 9222.")
+		fmt.Printf("\n  👉 To connect ldin to your regular Chrome browser:\n")
+		fmt.Printf("  1. Quit Chrome:  pkill -x 'Google Chrome'\n")
+		fmt.Printf("  2. Open Chrome:  open -a 'Google Chrome' --args --remote-debugging-port=9222\n")
+		fmt.Printf("  3. Log into LinkedIn, then run: ldin profile show\n\n")
 	}
 
-	// --- Strategy 2: Voyager API with session cookie (direct HTTP) ---
-	Formatter.Warning("Trying Voyager API...")
-	rich, voyagerErr := LinkedInClient.GetRichProfile(ctx)
-	if voyagerErr == nil && (rich.FirstName != "" || len(rich.Skills) > 0) {
-		return renderVoyagerProfile(rich)
-	}
-
-	// --- Strategy 3: OpenID basic identity ---
-	Formatter.Warning("Fetching basic identity via official OpenID API...")
+	// --- Fallback Strategy: OpenID API ---
+	Formatter.Info("Fetching basic profile via LinkedIn API...")
 	basic, err := LinkedInClient.GetCurrentMemberProfile(ctx)
 	if err != nil {
-		return fmt.Errorf("all profile fetch strategies failed.\n\nTo fix:\n  ldin browser setup     (download headless Chromium)\n  ldin browser test      (verify it works)\n  ldin profile show      (full real-time profile)")
+		return fmt.Errorf("could not fetch profile.\n\nPlease start Chrome with:\n  open -a 'Google Chrome' --args --remote-debugging-port=9222\nThen run: ldin profile show")
 	}
 
 	return Formatter.Print(basic, func() {
@@ -128,7 +103,12 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 			fmt.Println(output.HeaderStyle.Render("Headline"))
 			fmt.Printf("  %s\n\n", basic.Headline)
 		}
-		fmt.Printf("\n  ℹ For full profile (skills, experience, education):\n  Run: ldin browser setup\n  Then: ldin profile show\n\n")
+		if basic.Location != "" {
+			fmt.Println(output.HeaderStyle.Render("Location"))
+			fmt.Printf("  %s\n\n", basic.Location)
+		}
+		fmt.Printf("  ℹ To view full rich profile (experience, skills, education):\n")
+		fmt.Printf("  Launch Chrome with: open -a 'Google Chrome' --args --remote-debugging-port=9222\n\n")
 	})
 }
 

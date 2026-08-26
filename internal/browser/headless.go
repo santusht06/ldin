@@ -22,8 +22,10 @@ import (
 
 // HeadlessBrowser wraps a headless Chromium instance managed by go-rod
 type HeadlessBrowser struct {
-	browser *rod.Browser
-	page    *rod.Page
+	browser    *rod.Browser
+	page       *rod.Page
+	liAt       string
+	jsessionID string
 }
 
 // Launch starts a headless Chromium instance (downloads if not present).
@@ -32,10 +34,12 @@ func Launch(ctx context.Context) (*HeadlessBrowser, error) {
 	// Find or download Chromium
 	u, err := launcher.New().
 		Headless(true).
-		// Hide automation flags to avoid LinkedIn bot detection
+		// Disable CORS & web security so fetch() can hit linkedin.com from about:blank
+		Set("disable-web-security").
+		Set("disable-site-isolation-trials").
+		Set("disable-features", "IsolateOrigins,site-per-process").
 		Set("disable-blink-features", "AutomationControlled").
 		Set("exclude-switches", "enable-automation").
-		Set("disable-features", "IsolateOrigins,site-per-process").
 		NoSandbox(true).
 		Launch()
 	if err != nil {
@@ -44,7 +48,6 @@ func Launch(ctx context.Context) (*HeadlessBrowser, error) {
 
 	b := rod.New().ControlURL(u).MustConnect()
 
-	// Override navigator.webdriver to avoid detection
 	if err := b.IgnoreCertErrors(true); err != nil {
 		b.MustClose()
 		return nil, err
@@ -53,79 +56,85 @@ func Launch(ctx context.Context) (*HeadlessBrowser, error) {
 	return &HeadlessBrowser{browser: b}, nil
 }
 
-// InjectSession sets the li_at session cookie so LinkedIn sees you as logged in
+// InjectSession sets the li_at session cookie using Rod's SetCookies (called before page load)
 func (h *HeadlessBrowser) InjectSession(liAt, jsessionID string) error {
-	if err := h.browser.SetCookies([]*proto.NetworkCookieParam{
-		{
-			Name:     "li_at",
-			Value:    liAt,
-			Domain:   ".linkedin.com",
-			Path:     "/",
-			HTTPOnly: true,
-			Secure:   true,
-		},
-		{
-			Name:     "JSESSIONID",
-			Value:    fmt.Sprintf(`"%s"`, strings.Trim(jsessionID, `"`)),
-			Domain:   ".www.linkedin.com",
-			Path:     "/",
-			HTTPOnly: false,
-			Secure:   true,
-		},
-	}); err != nil {
-		return fmt.Errorf("failed injecting session cookies: %w", err)
-	}
+	h.liAt = liAt
+	h.jsessionID = strings.Trim(jsessionID, `"`)
 	return nil
 }
 
-// OpenPage navigates to a URL in the headless browser
-func (h *HeadlessBrowser) OpenPage(ctx context.Context, url string) error {
-	page, err := h.browser.Page(proto.TargetCreateTarget{URL: url})
+// OpenPage navigates to https://www.linkedin.com/robots.txt to establish the origin
+// then sets the session cookies so fetch() requests include li_at and JSESSIONID.
+func (h *HeadlessBrowser) OpenPage(ctx context.Context, _ string) error {
+	page, err := h.browser.Page(proto.TargetCreateTarget{URL: "https://www.linkedin.com/robots.txt"})
 	if err != nil {
 		return err
 	}
 	h.page = page
 
-	// Stealth: override navigator.webdriver before page loads
-	_, err = h.page.EvalOnNewDocument(`
+	// Stealth overrides
+	_, _ = h.page.EvalOnNewDocument(`
 		Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-		Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3]});
-		Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-		window.chrome = {runtime: {}};
+		Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+		Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+		window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
+		Object.defineProperty(navigator, 'platform', {get: () => 'MacIntel'});
 	`)
-	if err != nil {
-		return err
+
+	// Inject session cookies into Chromium's network cookie jar
+	if h.liAt != "" {
+		csrfClean := strings.Trim(h.jsessionID, `"`)
+		cookies := []*proto.NetworkCookieParam{
+			{
+				Name:     "li_at",
+				Value:    h.liAt,
+				Domain:   ".linkedin.com",
+				Path:     "/",
+				Secure:   true,
+				HTTPOnly: true,
+			},
+			{
+				Name:     "JSESSIONID",
+				Value:    fmt.Sprintf(`"%s"`, csrfClean),
+				Domain:   ".linkedin.com",
+				Path:     "/",
+				Secure:   true,
+				HTTPOnly: false,
+			},
+			{
+				Name:     "JSESSIONID",
+				Value:    fmt.Sprintf(`"%s"`, csrfClean),
+				Domain:   ".www.linkedin.com",
+				Path:     "/",
+				Secure:   true,
+				HTTPOnly: false,
+			},
+		}
+		_ = page.SetCookies(cookies)
 	}
 
-	return page.Context(ctx).WaitLoad()
+	return nil
 }
 
-// FetchVoyagerProfile executes a fetch() inside the headless browser to get
-// the full LinkedIn Voyager profile — bypassing TLS fingerprinting entirely.
+// FetchVoyagerProfile executes an async fetch() inside headless Chromium.
 func (h *HeadlessBrowser) FetchVoyagerProfile(ctx context.Context, vanityName string) (*cdp.VoyagerProfile, error) {
 	if h.page == nil {
-		// Open LinkedIn silently
-		page, err := h.browser.Page(proto.TargetCreateTarget{URL: "https://www.linkedin.com"})
-		if err != nil {
-			return nil, err
-		}
-		h.page = page
-		_ = page.Context(ctx).WaitLoad()
+		return nil, fmt.Errorf("no page open — call OpenPage first")
 	}
 
-	endpoints := []string{
-		fmt.Sprintf("/voyager/api/identity/profiles/%s", vanityName),
-		fmt.Sprintf("/voyager/api/identity/profiles/%s/profileView", vanityName),
-	}
-
-	js := fmt.Sprintf(`
-(async () => {
-  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] ||
-               (document.cookie.match(/JSESSIONID=([^;]+)/) || [])[1] || '';
-  const endpoints = %s;
+	js := fmt.Sprintf(`async () => {
+  const csrf = %q;
+  const endpoints = [
+    '/voyager/api/identity/dash/profiles?q=vanityName&vanityName=%s',
+    '/voyager/api/identity/profiles/%s',
+    '/voyager/api/identity/profiles/%s/profileView',
+    '/voyager/api/me',
+  ];
+  const attempts = [];
   for (const ep of endpoints) {
     try {
       const resp = await fetch('https://www.linkedin.com' + ep, {
+        signal: AbortSignal.timeout(6000),
         credentials: 'include',
         headers: {
           'Accept': 'application/vnd.linkedin.normalized+json+2.1',
@@ -134,22 +143,20 @@ func (h *HeadlessBrowser) FetchVoyagerProfile(ctx context.Context, vanityName st
           'Csrf-Token': csrf,
         }
       });
+      attempts.push({ep: ep, status: resp.status, ok: resp.ok});
       if (resp.ok) {
         const data = await resp.json();
         return JSON.stringify({ok: true, endpoint: ep, status: resp.status, data: data});
       }
-    } catch(e) { continue; }
+    } catch(e) { attempts.push({ep: ep, error: e.message}); }
   }
-  return JSON.stringify({ok: false, error: 'all endpoints failed'});
-})()
-`, buildJSArray(endpoints))
+  return JSON.stringify({ok: false, error: 'all endpoints failed', attempts: attempts, csrf: csrf});
+}`, h.jsessionID, vanityName, vanityName, vanityName)
 
-	result, err := h.page.Context(ctx).Eval(js)
+	raw, err := h.evalAsync(ctx, js)
 	if err != nil {
 		return nil, fmt.Errorf("headless JS eval failed: %w", err)
 	}
-
-	raw := result.Value.String()
 
 	var wrapper struct {
 		OK       bool                   `json:"ok"`
@@ -157,18 +164,20 @@ func (h *HeadlessBrowser) FetchVoyagerProfile(ctx context.Context, vanityName st
 		Status   int                    `json:"status"`
 		Data     map[string]interface{} `json:"data"`
 		Error    string                 `json:"error"`
+		Attempts []interface{}          `json:"attempts"`
+		CSRF     string                 `json:"csrf"`
 	}
 	if err := json.Unmarshal([]byte(raw), &wrapper); err != nil {
 		return nil, fmt.Errorf("failed parsing headless response: %w\nRaw: %.300s", err, raw)
 	}
 	if !wrapper.OK {
-		return nil, fmt.Errorf("headless fetch failed: %s", wrapper.Error)
+		attJSON, _ := json.Marshal(wrapper.Attempts)
+		return nil, fmt.Errorf("headless fetch failed: %s (attempts: %s, csrf: %s)", wrapper.Error, string(attJSON), wrapper.CSRF)
 	}
 
 	profile := &cdp.VoyagerProfile{VanityName: vanityName}
 	parseVoyagerData(wrapper.Data, profile)
 
-	// Fetch skills if empty
 	if len(profile.Skills) == 0 {
 		skills, _ := h.FetchSkills(ctx, vanityName)
 		profile.Skills = skills
@@ -183,10 +192,10 @@ func (h *HeadlessBrowser) FetchSkills(ctx context.Context, vanityName string) ([
 		return nil, fmt.Errorf("no page open")
 	}
 
-	js := fmt.Sprintf(`
-(async () => {
-  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || '';
-  const resp = await fetch('/voyager/api/identity/profiles/%s/skills', {
+	js := fmt.Sprintf(`async () => {
+  const csrf = %q;
+  const resp = await fetch('https://www.linkedin.com/voyager/api/identity/profiles/%s/skills', {
+    signal: AbortSignal.timeout(6000),
     credentials: 'include',
     headers: {
       'Accept': 'application/vnd.linkedin.normalized+json+2.1',
@@ -197,36 +206,29 @@ func (h *HeadlessBrowser) FetchSkills(ctx context.Context, vanityName string) ([
   });
   if (!resp.ok) return '[]';
   const data = await resp.json();
-  const skills = (data.elements || []).map(e => e.name).filter(Boolean);
-  return JSON.stringify(skills);
-})()
-`, vanityName)
+  return JSON.stringify((data.elements || []).map(e => e.name).filter(Boolean));
+}`, h.jsessionID, vanityName)
 
-	result, err := h.page.Context(ctx).Eval(js)
+	raw, err := h.evalAsync(ctx, js)
 	if err != nil {
 		return nil, err
 	}
 
 	var skills []string
-	_ = json.Unmarshal([]byte(result.Value.String()), &skills)
+	_ = json.Unmarshal([]byte(raw), &skills)
 	return skills, nil
 }
 
 // GetCurrentUser fetches the currently logged in user's identity via /voyager/api/me
 func (h *HeadlessBrowser) GetCurrentUser(ctx context.Context) (string, string, error) {
 	if h.page == nil {
-		page, err := h.browser.Page(proto.TargetCreateTarget{URL: "https://www.linkedin.com"})
-		if err != nil {
-			return "", "", err
-		}
-		h.page = page
-		_ = page.Context(ctx).WaitLoad()
+		return "", "", fmt.Errorf("no page open")
 	}
 
-	js := `
-(async () => {
-  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || '';
-  const resp = await fetch('/voyager/api/me', {
+	js := fmt.Sprintf(`async () => {
+  const csrf = %q;
+  const resp = await fetch('https://www.linkedin.com/voyager/api/me', {
+    signal: AbortSignal.timeout(6000),
     credentials: 'include',
     headers: {
       'Accept': 'application/vnd.linkedin.normalized+json+2.1',
@@ -242,10 +244,9 @@ func (h *HeadlessBrowser) GetCurrentUser(ctx context.Context) (string, string, e
     vanityName: d.plainId || (me && me.publicIdentifier) || '',
     name: me ? (me.firstName + ' ' + me.lastName) : ''
   });
-})()
-`
+}`, h.jsessionID)
 
-	result, err := h.page.Context(ctx).Eval(js)
+	raw, err := h.evalAsync(ctx, js)
 	if err != nil {
 		return "", "", err
 	}
@@ -254,8 +255,18 @@ func (h *HeadlessBrowser) GetCurrentUser(ctx context.Context) (string, string, e
 		VanityName string `json:"vanityName"`
 		Name       string `json:"name"`
 	}
-	_ = json.Unmarshal([]byte(result.Value.String()), &me)
+	_ = json.Unmarshal([]byte(raw), &me)
 	return me.VanityName, me.Name, nil
+}
+
+// evalAsync executes an async JS expression in the headless browser using Rod's
+// Evaluate with AwaitPromise=true — the correct way to run fetch() in headless Chrome.
+func (h *HeadlessBrowser) evalAsync(ctx context.Context, js string) (string, error) {
+	res, err := h.page.Context(ctx).Evaluate(rod.Eval(js).ByPromise())
+	if err != nil {
+		return "", err
+	}
+	return res.Value.String(), nil
 }
 
 // Eval runs arbitrary JavaScript in the headless browser context
@@ -263,11 +274,7 @@ func (h *HeadlessBrowser) Eval(ctx context.Context, js string) (string, error) {
 	if h.page == nil {
 		return "", fmt.Errorf("no page open — call OpenPage first")
 	}
-	result, err := h.page.Context(ctx).Eval(js)
-	if err != nil {
-		return "", err
-	}
-	return result.Value.String(), nil
+	return h.evalAsync(ctx, js)
 }
 
 // Close shuts down the headless Chromium process

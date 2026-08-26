@@ -6,215 +6,172 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"time"
 
-	"github.com/go-rod/rod/lib/launcher"
 	"github.com/spf13/cobra"
-	"github.com/santusht/ldin/internal/browser"
 	"github.com/santusht/ldin/internal/cdp"
+	"github.com/santusht/ldin/internal/output"
 )
 
 var (
-	flagBrowserPort     int
-	flagBrowserHost     string
-	flagBrowserHeadless bool
+	flagBrowserPort int
+	flagBrowserHost string
 )
 
 var browserCmd = &cobra.Command{
 	Use:   "browser",
-	Short: "Headless Chrome engine — real-time LinkedIn data without opening a window",
-	Long: `ldin browser runs Chromium invisibly inside your terminal.
-No GUI window. No manual Chrome setup. Just pure terminal.
+	Short: "Chrome DevTools Protocol bridge — control LinkedIn via your regular Chrome browser",
+	Long: `ldin browser connects to your regular Google Chrome browser via Chrome DevTools Protocol (CDP).
+This gives ldin full access to your logged-in LinkedIn session with genuine TLS fingerprints,
+bypassing all bot-detection mechanisms.
 
-  ldin browser setup      Download Chromium (first time only)
-  ldin browser test       Run a headless fetch test against LinkedIn
-  ldin browser status     Check if CDP bridge is reachable
-  ldin browser launch     Launch Chrome with remote debugging (optional GUI mode)`,
+Commands:
+  ldin browser launch     Launch Google Chrome with CDP remote debugging enabled
+  ldin browser status     Check connection to your regular Chrome browser
+  ldin browser test       Test fetching real-time data from your active LinkedIn tab`,
 }
 
-var browserSetupCmd = &cobra.Command{
-	Use:   "setup",
-	Short: "Download headless Chromium (run once — ~120MB)",
-	Long: `Downloads the headless Chromium binary for your platform.
-This is required once. After setup, all ldin commands that need a real browser
-will use this invisible Chromium instance automatically.`,
+var browserLaunchCmd = &cobra.Command{
+	Use:   "launch",
+	Short: "Launch Google Chrome with remote debugging on port 9222",
+	Long: `Starts Google Chrome with --remote-debugging-port=9222.
+If Chrome is already open, it will notify you to restart Chrome with debugging enabled.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		Formatter.Info("Downloading headless Chromium for your platform...")
-		Formatter.Info("This is a one-time download (~120MB). Please wait...")
+		port := flagBrowserPort
 
-		pather := launcher.NewBrowser()
-		if err := pather.Download(); err != nil {
-			return fmt.Errorf("download failed: %w", err)
+		// Check if already active
+		tabs, err := cdp.ListTabs(flagBrowserHost, port)
+		if err == nil && len(tabs) > 0 {
+			Formatter.Success("Chrome CDP is already active on port %d (%d tabs open)!", port, len(tabs))
+			return nil
 		}
 
-		Formatter.Success("Chromium downloaded successfully!")
-		Formatter.PrintKeyValue("Location", pather.BinPath())
-		fmt.Printf("\n  You can now run:\n  ldin browser test\n  ldin profile show\n\n")
-		return nil
-	},
-}
+		Formatter.Info("Launching Google Chrome with remote debugging on port %d...", port)
 
-var browserTestCmd = &cobra.Command{
-	Use:   "test",
-	Short: "Test headless Chromium by fetching your LinkedIn profile invisibly",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if !flagBrowserHeadless {
-			// Try CDP to existing Chrome first
-			Formatter.Info("Checking for existing Chrome CDP on port %d...", flagBrowserPort)
-			tabs, err := cdp.ListTabs(flagBrowserHost, flagBrowserPort)
-			if err == nil && len(tabs) > 0 {
-				tab := cdp.FindLinkedInTab(tabs)
-				if tab != nil {
-					bridge, err := cdp.Connect(ctx, tab)
-					if err == nil {
-						defer bridge.Close()
-						result, err := bridge.Eval(ctx, `
-(async () => {
-  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1] || 'none';
-  const resp = await fetch('/voyager/api/me', {
-    credentials: 'include',
-    headers: {'Accept': 'application/vnd.linkedin.normalized+json+2.1', 'X-Requested-With': 'XMLHttpRequest', 'Csrf-Token': csrf}
-  });
-  return JSON.stringify({status: resp.status, ok: resp.ok, csrf_found: csrf !== 'none'});
-})()
-`)
-						if err == nil {
-							Formatter.Success("CDP bridge working via existing Chrome!")
-							fmt.Printf("Response: %s\n", result)
-							return nil
-						}
-					}
-				}
+		// macOS launch command
+		c := exec.Command("open", "-a", "Google Chrome", "--args", fmt.Sprintf("--remote-debugging-port=%d", port))
+		if err := c.Run(); err != nil {
+			// Fallback direct binary execution
+			c2 := exec.Command("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+				fmt.Sprintf("--remote-debugging-port=%d", port),
+			)
+			if err2 := c2.Start(); err2 != nil {
+				return fmt.Errorf("failed launching Chrome: %w\n\nRun manually:\nopen -a 'Google Chrome' --args --remote-debugging-port=%d", err2, port)
 			}
 		}
 
-		// Headless Chromium test
-		Formatter.Info("Launching headless Chromium...")
-		hb, err := browser.Launch(ctx)
-		if err != nil {
-			return fmt.Errorf("%w\n\nRun first: ldin browser setup", err)
-		}
-		defer hb.Close()
-
-		Formatter.Info("Injecting your LinkedIn session cookie...")
-		creds, credErr := ConfigMgr.LoadProfile(AppCfg.ActiveProfile)
-		if credErr != nil || creds.SessionCookie == "" {
-			return fmt.Errorf("not authenticated. Run: ldin auth token <your_li_at_token>")
-		}
-
-		if err := hb.InjectSession(creds.SessionCookie, creds.CSRFToken); err != nil {
-			return fmt.Errorf("failed injecting session: %w", err)
-		}
-
-		Formatter.Info("Opening LinkedIn silently in headless Chromium...")
-		if err := hb.OpenPage(ctx, "https://www.linkedin.com"); err != nil {
-			return fmt.Errorf("failed to load LinkedIn: %w", err)
-		}
-
-		vanityName, name, _ := hb.GetCurrentUser(ctx)
-		if name != "" || vanityName != "" {
-			Formatter.Success("Headless Chromium authenticated as: %s (%s)", name, vanityName)
+		// Wait briefly and verify
+		time.Sleep(1500 * time.Millisecond)
+		tabs, err = cdp.ListTabs(flagBrowserHost, port)
+		if err == nil {
+			Formatter.Success("Google Chrome connected on port %d ✓", port)
+			Formatter.Info("Sign into linkedin.com in Chrome, then run: ldin profile show")
 		} else {
-			Formatter.Warning("Session may have expired. Try: ldin auth token <fresh_li_at>")
+			Formatter.Warning("Chrome launched. If already running, restart Chrome first:")
+			fmt.Printf("\n  1. Quit Chrome:  pkill -x 'Google Chrome'\n")
+			fmt.Printf("  2. Open Chrome:  open -a 'Google Chrome' --args --remote-debugging-port=%d\n\n", port)
 		}
 
-		Formatter.Info("Fetching profile invisibly via headless Chromium...")
-		profile, err := hb.FetchVoyagerProfile(ctx, vanityName)
-		if err != nil {
-			return fmt.Errorf("headless profile fetch failed: %w", err)
-		}
-
-		Formatter.Success("Headless browser is working!")
-		Formatter.PrintKeyValue("Name", profile.FirstName+" "+profile.LastName)
-		Formatter.PrintKeyValue("Headline", profile.Headline)
-		Formatter.PrintKeyValue("Skills fetched", fmt.Sprintf("%d", len(profile.Skills)))
-		Formatter.PrintKeyValue("Experience entries", fmt.Sprintf("%d", len(profile.Experience)))
 		return nil
 	},
 }
 
 var browserStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Check browser bridge status (CDP or headless Chromium)",
+	Short: "Check connection to your regular Chrome browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		port := flagBrowserPort
 
-		fmt.Println(outputTitleStyle(" ldin Browser Bridge Status "))
+		fmt.Println(output.TitleStyle.Render(" Chrome Browser Bridge Status "))
 
-		// Check Chromium binary
-		pather := launcher.NewBrowser()
-		binPath := pather.BinPath()
-		if binPath != "" {
-			Formatter.PrintKeyValue("Headless Chromium", "✓ Installed at "+binPath)
-		} else {
-			Formatter.PrintKeyValue("Headless Chromium", "✗ Not installed (run: ldin browser setup)")
-		}
-
-		// Check existing Chrome CDP
 		tabs, err := cdp.ListTabs(flagBrowserHost, port)
 		if err != nil {
-			Formatter.PrintKeyValue("Chrome CDP Bridge", fmt.Sprintf("✗ Not running on port %d", port))
-		} else {
-			Formatter.PrintKeyValue("Chrome CDP Bridge", fmt.Sprintf("✓ Connected — %d tab(s)", len(tabs)))
-			for _, t := range tabs {
-				if t.Type == "page" {
-					icon := "  "
-					if containsSubstr(t.URL, "linkedin.com") {
-						icon = "🔗"
-					}
-					fmt.Printf("    %s %s\n", icon, t.Title)
+			Formatter.PrintKeyValue("Connection", "✗ Disconnected")
+			Formatter.PrintKeyValue("Port", fmt.Sprintf("%s:%d", flagBrowserHost, port))
+			fmt.Printf("\n  👉 To enable Chrome bridge:\n")
+			fmt.Printf("  1. Quit Chrome:  pkill -x 'Google Chrome'\n")
+			fmt.Printf("  2. Start Chrome: open -a 'Google Chrome' --args --remote-debugging-port=%d\n\n", port)
+			return nil
+		}
+
+		Formatter.PrintKeyValue("Connection", "✓ Connected")
+		Formatter.PrintKeyValue("CDP Address", fmt.Sprintf("http://%s:%d", flagBrowserHost, port))
+		Formatter.PrintKeyValue("Open Tabs", fmt.Sprintf("%d", len(tabs)))
+
+		linkedInTabFound := false
+		for _, t := range tabs {
+			if t.Type == "page" {
+				icon := "  "
+				if containsString(t.URL, "linkedin.com") {
+					icon = "🔗"
+					linkedInTabFound = true
 				}
+				fmt.Printf("  %s %s\n     %s\n", icon, t.Title, t.URL)
 			}
 		}
 
+		fmt.Println()
+		if linkedInTabFound {
+			Formatter.Success("Active LinkedIn tab detected! Ready for real-time operations.")
+			fmt.Printf("  Try: ldin profile show\n\n")
+		} else {
+			Formatter.Warning("No LinkedIn tab open in Chrome. Navigate to linkedin.com in Chrome for best results.")
+		}
+
 		return nil
 	},
 }
 
-var browserLaunchCmd = &cobra.Command{
-	Use:   "launch",
-	Short: "Launch Chrome with remote debugging enabled (optional GUI mode)",
+var browserTestCmd = &cobra.Command{
+	Use:   "test",
+	Short: "Test real-time LinkedIn communication via your regular Chrome browser",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
 		port := flagBrowserPort
+		Formatter.Info("Connecting to Chrome on %s:%d...", flagBrowserHost, port)
 
-		if flagBrowserHeadless {
-			Formatter.Info("Use `ldin browser test` to run headless Chromium directly.")
-			return nil
-		}
-
-		Formatter.Info("Launching Chrome with CDP on port %d...", port)
 		tabs, err := cdp.ListTabs(flagBrowserHost, port)
-		if err == nil && len(tabs) > 0 {
-			Formatter.Success("Chrome CDP already running on port %d — %d tab(s) detected.", port, len(tabs))
-			return nil
+		if err != nil {
+			return fmt.Errorf("could not connect to Chrome on port %d: %w\n\nRun: ldin browser launch", port, err)
 		}
 
-		chromePaths := []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+		tab := cdp.FindLinkedInTab(tabs)
+		if tab == nil {
+			return fmt.Errorf("no open tab found in Chrome.\n\nPlease open linkedin.com in your Chrome browser")
 		}
 
-		for _, path := range chromePaths {
-			_ = path
+		Formatter.Info("Connecting to Chrome tab: %s", tab.Title)
+		bridge, err := cdp.Connect(ctx, tab)
+		if err != nil {
+			return fmt.Errorf("CDP connection failed: %w", err)
 		}
-		fmt.Printf("\n  Manually start Chrome with:\n\n")
-		fmt.Printf("  open -a 'Google Chrome' --args --remote-debugging-port=%d\n\n", port)
-		fmt.Printf("  Or use headless mode (no window needed):\n")
-		fmt.Printf("  ldin browser test\n\n")
+		defer bridge.Close()
 
+		Formatter.Info("Querying active session from Chrome...")
+		profile, err := cdp.FetchFullProfileView(ctx, bridge, "")
+		if err != nil {
+			return fmt.Errorf("failed fetching profile via Chrome: %w", err)
+		}
+
+		Formatter.Success("Communication with regular Chrome is working!")
+		Formatter.PrintKeyValue("Name", profile.FirstName+" "+profile.LastName)
+		Formatter.PrintKeyValue("Vanity URL", profile.VanityName)
+		Formatter.PrintKeyValue("Headline", profile.Headline)
+		Formatter.PrintKeyValue("Skills count", fmt.Sprintf("%d", len(profile.Skills)))
+		Formatter.PrintKeyValue("Experience count", fmt.Sprintf("%d", len(profile.Experience)))
+		fmt.Printf("\n  Run `ldin profile show` to see the full rendered profile.\n\n")
 		return nil
 	},
 }
 
-func outputTitleStyle(s string) string {
-	return "\n  " + s + "\n"
+func containsString(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsSub(s, sub))
 }
 
-func containsSubstr(s, sub string) bool {
+func containsSub(s, sub string) bool {
 	for i := 0; i <= len(s)-len(sub); i++ {
 		if s[i:i+len(sub)] == sub {
 			return true
@@ -226,12 +183,10 @@ func containsSubstr(s, sub string) bool {
 func init() {
 	browserCmd.PersistentFlags().IntVar(&flagBrowserPort, "port", cdp.DefaultCDPPort, "Chrome CDP debugging port")
 	browserCmd.PersistentFlags().StringVar(&flagBrowserHost, "host", cdp.DefaultCDPHost, "Chrome CDP host")
-	browserCmd.PersistentFlags().BoolVar(&flagBrowserHeadless, "headless", true, "Use headless Chromium (no window)")
 
-	browserCmd.AddCommand(browserSetupCmd)
-	browserCmd.AddCommand(browserTestCmd)
-	browserCmd.AddCommand(browserStatusCmd)
 	browserCmd.AddCommand(browserLaunchCmd)
+	browserCmd.AddCommand(browserStatusCmd)
+	browserCmd.AddCommand(browserTestCmd)
 
 	RootCmd.AddCommand(browserCmd)
 }
