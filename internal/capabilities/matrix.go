@@ -232,8 +232,12 @@ var Registry = []Capability{
 // EvaluateCapabilities checks which capabilities are satisfied by granted scopes
 func EvaluateCapabilities(grantedScopes []string) []CapabilityStatus {
 	scopeSet := make(map[string]bool)
-	for _, s := range grantedScopes {
-		scopeSet[strings.TrimSpace(s)] = true
+	for _, raw := range grantedScopes {
+		for _, part := range strings.Split(raw, ",") {
+			for _, s := range strings.Fields(part) {
+				scopeSet[strings.TrimSpace(s)] = true
+			}
+		}
 	}
 
 	var results []CapabilityStatus
@@ -260,8 +264,12 @@ func CheckCapability(id string, grantedScopes []string) (bool, *Capability, []st
 	for _, cap := range Registry {
 		if cap.ID == id {
 			scopeSet := make(map[string]bool)
-			for _, s := range grantedScopes {
-				scopeSet[strings.TrimSpace(s)] = true
+			for _, raw := range grantedScopes {
+				for _, part := range strings.Split(raw, ",") {
+					for _, s := range strings.Fields(part) {
+						scopeSet[strings.TrimSpace(s)] = true
+					}
+				}
 			}
 
 			var missing []string
