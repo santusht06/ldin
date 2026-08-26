@@ -22,6 +22,7 @@ var (
 	flagQuiet       bool
 	flagVerbose     bool
 	flagDebug       bool
+	flagShowCurl    bool
 	flagConfigFile  string
 
 	// Global runtime singletons initialized in PersistentPreRun
@@ -34,10 +35,10 @@ var (
 // RootCmd is the base command for ldin
 var RootCmd = &cobra.Command{
 	Use:   "ldin",
-	Short: "ldin — The Developer-First LinkedIn CLI & AI Platform",
-	Long: `ldin is a high-performance command-line workspace for LinkedIn.
+	Short: "ldin — The Developer-First LinkedIn CLI & cURL Bridge Platform",
+	Long: `ldin is a high-performance command-line bridge between your terminal, cURL, and LinkedIn.
 Manage your professional identity, Profile-as-Code, content publishing,
-social graph, and analytics from the terminal with an autonomous AI agent layer.
+and direct REST operations without browser dependencies.
 
 Simple things should be simple. Complex things should be possible.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -74,6 +75,7 @@ Simple things should be simple. Complex things should be possible.`,
 
 		creds, _ := ConfigMgr.LoadProfile(targetProfile)
 		LinkedInClient = linkedin.NewClient(creds, AppCfg.LinkedInAPIVersion)
+		LinkedInClient.PrintCurl = flagShowCurl
 
 		return nil
 	},
@@ -87,6 +89,7 @@ func init() {
 	RootCmd.PersistentFlags().BoolVarP(&flagQuiet, "quiet", "q", false, "Suppress non-essential terminal output")
 	RootCmd.PersistentFlags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose output")
 	RootCmd.PersistentFlags().BoolVar(&flagDebug, "debug", false, "Enable debug mode with full HTTP logs")
+	RootCmd.PersistentFlags().BoolVar(&flagShowCurl, "curl", false, "Print equivalent cURL command for the request")
 	RootCmd.PersistentFlags().StringVar(&flagConfigFile, "config", "", "Custom configuration file path")
 }
 

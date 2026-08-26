@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ type Client struct {
 	APIVersion  string
 	HTTPClient  *http.Client
 	Profile     *config.ProfileCredentials
+	PrintCurl   bool
 }
 
 // NewClient initializes a LinkedIn REST API client for the active profile
@@ -57,6 +59,14 @@ func NewClient(creds *config.ProfileCredentials, apiVersion string) *Client {
 	if creds != nil {
 		tok = creds.AccessToken
 	}
+	// Fallback to direct LINKEDIN_TOKEN or LI_TOKEN environment variable
+	if tok == "" {
+		if envTok := strings.TrimSpace(os.Getenv("LINKEDIN_TOKEN")); envTok != "" {
+			tok = envTok
+		} else if envTok := strings.TrimSpace(os.Getenv("LI_TOKEN")); envTok != "" {
+			tok = envTok
+		}
+	}
 
 	return &Client{
 		BaseURL:     DefaultBaseURL,
@@ -67,6 +77,39 @@ func NewClient(creds *config.ProfileCredentials, apiVersion string) *Client {
 		},
 		Profile: creds,
 	}
+}
+
+// BuildCurl generates the exact equivalent cURL command string
+func (c *Client) BuildCurl(method, fullURL string, body interface{}, headers map[string]string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("curl -X %s '%s' \\\n", method, fullURL))
+	sb.WriteString(fmt.Sprintf("  -H 'Authorization: Bearer %s' \\\n", c.AccessToken))
+	sb.WriteString(fmt.Sprintf("  -H 'Linkedin-Version: %s' \\\n", c.APIVersion))
+	sb.WriteString("  -H 'X-Restli-Protocol-Version: 2.0.0' \\\n")
+	sb.WriteString("  -H 'Content-Type: application/json'")
+
+	for k, v := range headers {
+		sb.WriteString(fmt.Sprintf(" \\\n  -H '%s: %s'", k, v))
+	}
+
+	if body != nil {
+		var bodyStr string
+		switch v := body.(type) {
+		case []byte:
+			bodyStr = string(v)
+		case string:
+			bodyStr = v
+		default:
+			jsonData, _ := json.Marshal(body)
+			bodyStr = string(jsonData)
+		}
+		if bodyStr != "" {
+			escaped := strings.ReplaceAll(bodyStr, "'", "'\\''")
+			sb.WriteString(fmt.Sprintf(" \\\n  -d '%s'", escaped))
+		}
+	}
+
+	return sb.String()
 }
 
 // Request executes an HTTP request against the LinkedIn REST API
@@ -103,6 +146,11 @@ func (c *Client) Request(ctx context.Context, method, endpoint string, query url
 			}
 			reqBody = bytes.NewReader(jsonData)
 		}
+	}
+
+	if c.PrintCurl {
+		curlStr := c.BuildCurl(method, fullURL, body, headers)
+		fmt.Fprintf(os.Stderr, "=== Generated cURL Request ===\n%s\n==============================\n", curlStr)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, reqBody)

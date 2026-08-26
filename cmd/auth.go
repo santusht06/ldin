@@ -23,55 +23,92 @@ var (
 	flagAuthPort         int
 	flagAuthName         string
 	flagAuthScopes       string
+	flagAuthBrowser      bool
 )
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Manage LinkedIn authentication, tokens, and multi-identity sessions",
-	Long:  `Authenticate ldin with LinkedIn via OAuth 2.0 PKCE, view active session, inspect scopes, or manage multiple identities.`,
+	Long: `Authenticate ldin with LinkedIn directly via access token or OAuth.
+Zero browser dependencies required by default — simply pass your token or export LINKEDIN_TOKEN.`,
 }
 
-var authLoginCmd = &cobra.Command{
-	Use:   "login",
-	Short: "Authenticate with LinkedIn",
-	Long: `Start an interactive OAuth 2.0 authentication flow in your browser, or supply a pre-generated token.
+var authTokenCmd = &cobra.Command{
+	Use:   "token [token-string]",
+	Short: "Set active LinkedIn access token directly from terminal (No browser required)",
+	Long: `Save a LinkedIn access token directly from your terminal.
 Example:
-  ldin auth login
-  ldin auth login --name company --client-id <id> --client-secret <secret>
-  ldin auth login --token <access_token>`,
+  ldin auth token AQV...
+  ldin auth token --name company AQV...
+  export LINKEDIN_TOKEN=AQV...`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		profileName := flagAuthName
 		if profileName == "" {
 			profileName = "default"
 		}
 
-		// Direct Token Flow
-		if flagAuthToken != "" {
-			userInfo, err := auth.FetchUserInfo(flagAuthToken)
-			if err != nil {
-				Formatter.Warning("Could not fetch user details with provided token (non-fatal): %v", err)
-				userInfo = &auth.UserInfoResponse{
-					Sub:  "urn:li:person:custom",
-					Name: "LinkedIn Member",
-				}
-			}
-
-			tokResp := &auth.TokenResponse{
-				AccessToken: flagAuthToken,
-				ExpiresIn:   60 * 24 * 3600,
-				Scope:       strings.Join(auth.DefaultScopes, " "),
-			}
-
-			err = auth.SaveSession(ConfigMgr, profileName, tokResp, userInfo, flagAuthClientID, flagAuthClientSecret)
-			if err != nil {
-				return fmt.Errorf("failed saving session: %w", err)
-			}
-
-			Formatter.Success("Successfully authenticated profile '%s' for %s (%s)", profileName, userInfo.Name, userInfo.Sub)
-			return nil
+		tok := ""
+		if len(args) > 0 {
+			tok = strings.TrimSpace(args[0])
+		} else if flagAuthToken != "" {
+			tok = strings.TrimSpace(flagAuthToken)
+		} else {
+			fmt.Print("Enter or paste LinkedIn Access Token: ")
+			fmt.Scanln(&tok)
+			tok = strings.TrimSpace(tok)
 		}
 
-		// Interactive OAuth 2.0 PKCE Flow
+		if tok == "" {
+			return fmt.Errorf("token cannot be empty")
+		}
+
+		Formatter.Info("Validating token against LinkedIn API (https://api.linkedin.com/v2/userinfo)...")
+		userInfo, err := auth.FetchUserInfo(tok)
+		if err != nil {
+			Formatter.Warning("Could not fetch user profile details with token (non-fatal): %v", err)
+			userInfo = &auth.UserInfoResponse{
+				Sub:  "urn:li:person:authenticated",
+				Name: "LinkedIn Member",
+			}
+		}
+
+		tokResp := &auth.TokenResponse{
+			AccessToken: tok,
+			ExpiresIn:   60 * 24 * 3600,
+			Scope:       strings.Join(auth.DefaultScopes, " "),
+		}
+
+		err = auth.SaveSession(ConfigMgr, profileName, tokResp, userInfo, flagAuthClientID, flagAuthClientSecret)
+		if err != nil {
+			return fmt.Errorf("failed saving session: %w", err)
+		}
+
+		Formatter.Success("Token successfully saved for profile '%s'!", profileName)
+		Formatter.PrintKeyValue("Member", userInfo.Name)
+		Formatter.PrintKeyValue("Member URN", userInfo.Sub)
+		return nil
+	},
+}
+
+var authLoginCmd = &cobra.Command{
+	Use:   "login",
+	Short: "Authenticate with LinkedIn (Direct token or optional browser OAuth)",
+	Long: `Authenticate ldin with LinkedIn.
+By default, prompts for token directly in terminal. Pass --browser for OAuth 2.0 PKCE browser flow.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if !flagAuthBrowser && flagAuthToken == "" && len(args) == 0 {
+			return authTokenCmd.RunE(cmd, args)
+		}
+		if flagAuthToken != "" || len(args) > 0 {
+			return authTokenCmd.RunE(cmd, args)
+		}
+
+		profileName := flagAuthName
+		if profileName == "" {
+			profileName = "default"
+		}
+
+		// Optional OAuth 2.0 PKCE Flow
 		clientID := flagAuthClientID
 		clientSecret := flagAuthClientSecret
 		if clientID == "" {
@@ -82,9 +119,7 @@ Example:
 		}
 
 		if clientID == "" {
-			Formatter.Info("No LINKEDIN_CLIENT_ID provided. You can pass --client-id or set LINKEDIN_CLIENT_ID env var.")
-			Formatter.Info("Starting browser authorization...")
-			clientID = "ldin-client-id" // Fallback standard client
+			clientID = "ldin-client-id"
 		}
 
 		var scopes []string
@@ -94,7 +129,7 @@ Example:
 			scopes = auth.DefaultScopes
 		}
 
-		Formatter.Info("Opening LinkedIn authorization page in your browser on port %d...", flagAuthPort)
+		Formatter.Info("Opening LinkedIn authorization page in browser on port %d...", flagAuthPort)
 		tok, userInfo, err := auth.StartOAuthFlow(clientID, clientSecret, scopes, flagAuthPort)
 		if err != nil {
 			return fmt.Errorf("authentication error: %w", err)
@@ -108,7 +143,6 @@ Example:
 		Formatter.Success("Authentication complete! Active profile: %s", profileName)
 		Formatter.PrintKeyValue("Member", userInfo.Name)
 		Formatter.PrintKeyValue("Member URN", userInfo.Sub)
-		Formatter.PrintKeyValue("Email", userInfo.Email)
 		return nil
 	},
 }
@@ -122,16 +156,24 @@ var authStatusCmd = &cobra.Command{
 			profileName = AppCfg.ActiveProfile
 		}
 
+		// Check env var first
+		if envTok := os.Getenv("LINKEDIN_TOKEN"); envTok != "" {
+			fmt.Println(output.TitleStyle.Render(" ldin Authentication Status "))
+			Formatter.PrintKeyValue("Source", "LINKEDIN_TOKEN environment variable")
+			Formatter.PrintKeyValue("Token", fmt.Sprintf("Active (Length: %d chars)", len(envTok)))
+			return nil
+		}
+
 		creds, err := ConfigMgr.LoadProfile(profileName)
 		if err != nil {
-			Formatter.Error("Not logged in. Run 'ldin auth login' to authenticate.")
+			Formatter.Error("Not logged in. Run 'ldin auth token <token>' or export LINKEDIN_TOKEN.")
 			return nil
 		}
 
 		remaining := time.Until(time.Unix(creds.ExpiresAt, 0))
 		statusText := "valid"
 		if remaining <= 0 {
-			statusText = "expired (run 'ldin auth refresh' or 'ldin auth login')"
+			statusText = "expired (run 'ldin auth token' or 'ldin auth refresh')"
 		} else {
 			statusText = fmt.Sprintf("valid (%d days remaining)", int(remaining.Hours()/24))
 		}
@@ -292,7 +334,11 @@ var authSwitchCmd = &cobra.Command{
 }
 
 func init() {
-	authLoginCmd.Flags().StringVar(&flagAuthToken, "token", "", "Direct personal access token for non-interactive or CI usage")
+	authTokenCmd.Flags().StringVar(&flagAuthName, "name", "default", "Profile name alias")
+	authTokenCmd.Flags().StringVar(&flagAuthToken, "token", "", "Token string (or pass as first argument)")
+
+	authLoginCmd.Flags().StringVar(&flagAuthToken, "token", "", "Direct personal access token")
+	authLoginCmd.Flags().BoolVar(&flagAuthBrowser, "browser", false, "Launch interactive browser OAuth flow")
 	authLoginCmd.Flags().StringVar(&flagAuthClientID, "client-id", "", "LinkedIn App Client ID")
 	authLoginCmd.Flags().StringVar(&flagAuthClientSecret, "client-secret", "", "LinkedIn App Client Secret")
 	authLoginCmd.Flags().IntVar(&flagAuthPort, "port", auth.DefaultPort, "Local redirect listener port")
@@ -301,6 +347,7 @@ func init() {
 
 	authLogoutCmd.Flags().StringVar(&flagAuthName, "name", "", "Specific profile to delete")
 
+	authCmd.AddCommand(authTokenCmd)
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authScopesCmd)
