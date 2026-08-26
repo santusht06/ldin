@@ -126,8 +126,6 @@ func StartOAuthFlow(clientID, clientSecret string, scopes []string, port int) (*
 	authURLValues.Set("redirect_uri", redirectURI)
 	authURLValues.Set("state", pkce.State)
 	authURLValues.Set("scope", strings.Join(scopes, " "))
-	authURLValues.Set("code_challenge", pkce.Challenge)
-	authURLValues.Set("code_challenge_method", "S256")
 
 	authURL := fmt.Sprintf("%s?%s", LinkedInAuthURL, authURLValues.Encode())
 
@@ -205,7 +203,7 @@ p { color: #8b949e; font-size: 15px; margin: 0; }
 	case code := <-codeChan:
 		_ = server.Shutdown(context.Background())
 		// Exchange code for token
-		return ExchangeCode(clientID, clientSecret, code, redirectURI, pkce.Verifier)
+		return ExchangeCode(clientID, clientSecret, code, redirectURI, "")
 	case err := <-errChan:
 		_ = server.Shutdown(context.Background())
 		return nil, nil, err
@@ -223,9 +221,8 @@ func ExchangeCode(clientID, clientSecret, code, redirectURI, codeVerifier string
 	data.Set("redirect_uri", redirectURI)
 	data.Set("client_id", clientID)
 	data.Set("client_secret", clientSecret)
-	if codeVerifier != "" {
-		data.Set("code_verifier", codeVerifier)
-	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	req, err := http.NewRequest("POST", LinkedInTokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
@@ -233,7 +230,6 @@ func ExchangeCode(clientID, clientSecret, code, redirectURI, codeVerifier string
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("token request failed: %w", err)
@@ -253,7 +249,6 @@ func ExchangeCode(clientID, clientSecret, code, redirectURI, codeVerifier string
 	// Fetch userinfo
 	userInfo, err := FetchUserInfo(tok.AccessToken)
 	if err != nil {
-		// Non-fatal if userinfo fails, construct fallback
 		userInfo = &UserInfoResponse{
 			Sub:  "urn:li:person:authenticated",
 			Name: "LinkedIn Member",
