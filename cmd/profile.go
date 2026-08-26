@@ -64,69 +64,48 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not authenticated with LinkedIn for profile '%s'.\n\nRun:\n    ldin auth login --profile %s\n\nThen try again.", targetProfile, targetProfile)
 	}
 
-	name := creds.DisplayName
-	if name == "" {
-		name = creds.Name
-	}
-	vanity := creds.VanityName
-	if vanity == "" {
-		vanity = "santushtkotai"
+	// 2. Fetch live real-time profile data directly from LinkedIn server
+	Formatter.Info("Querying live profile from LinkedIn server...")
+	profile, err := LinkedInClient.GetCurrentMemberProfile(ctx)
+	if err != nil {
+		return fmt.Errorf("failed fetching real-time profile from LinkedIn server: %w", err)
 	}
 
-	// 2. Fetch live identity from official LinkedIn OpenID API if available
-	basic, err := LinkedInClient.GetCurrentMemberProfile(ctx)
-	if err == nil && basic.Name != "" {
-		name = basic.Name
-		if basic.Headline != "" {
-			creds.DisplayName = basic.Name
+	// 3. Render real-time server JSON response
+	return Formatter.Print(profile, func() {
+		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile (Live Server Data) "))
+		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(profile.Name))
+		if profile.Sub != "" {
+			fmt.Printf("  URN: %s\n", profile.Sub)
 		}
-	}
-
-	// 3. Load Profile-as-Code state (local profile.yaml or defaults)
-	profilePath := flagProfileFile
-	if profilePath == "" {
-		profilePath = filepath.Join(os.Getenv("PWD"), "profile.yaml")
-	}
-
-	pac, _ := profilecode.LoadProfileFile(profilePath)
-	if pac == nil {
-		pac = &profilecode.ProfileAsCode{
-			Name:     name,
-			Headline: "Software Engineer | Backend Engineering | Distributed Systems",
-			Location: "Indore, India",
-			About:    "Backend-focused Software Engineer passionate about scalable distributed systems, systems programming, and high-performance backend infrastructure.",
-			Skills:   []string{"Go", "Python", "FastAPI", "PostgreSQL", "Redis", "Docker", "Kubernetes", "Distributed Systems"},
-			Experience: []profilecode.Experience{
-				{
-					Role:        "Software Engineer",
-					Company:     "ShareXpress Systems",
-					StartDate:   "2024-01",
-					EndDate:     "Present",
-					Current:     true,
-					Description: "Building scalable distributed systems, fault-tolerant file engines, and developer tooling.",
-				},
-			},
-			Education: []profilecode.Education{
-				{
-					School: "Medi-Caps University",
-					Degree: "Bachelor of Technology - BTech, Computer Science",
-				},
-			},
-		}
-	}
-
-	if name != "" {
-		pac.Name = name
-	}
-
-	return Formatter.Print(pac, func() {
-		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile "))
-		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(pac.Name))
-		if vanity != "" {
-			fmt.Printf("  linkedin.com/in/%s\n", vanity)
+		if profile.VanityName != "" {
+			fmt.Printf("  linkedin.com/in/%s\n", profile.VanityName)
 		}
 		Formatter.PrintDivider(50)
-		renderProfileFields(pac.Headline, pac.Location, pac.About, pac.Skills, pac.Experience, pac.Education, pac.Certifications, pac.Languages)
+
+		if profile.Email != "" {
+			Formatter.PrintKeyValue("Email", profile.Email)
+		}
+		if profile.GivenName != "" || profile.FamilyName != "" {
+			Formatter.PrintKeyValue("Given / Family", fmt.Sprintf("%s / %s", profile.GivenName, profile.FamilyName))
+		}
+		if profile.EmailVerified {
+			Formatter.PrintKeyValue("Email Verified", "true")
+		}
+		if profile.Headline != "" {
+			fmt.Println(output.HeaderStyle.Render("Headline"))
+			fmt.Printf("  %s\n\n", profile.Headline)
+		}
+		if profile.Location != "" {
+			fmt.Println(output.HeaderStyle.Render("Location"))
+			fmt.Printf("  %s\n\n", profile.Location)
+		}
+		if profile.Picture != "" {
+			Formatter.PrintKeyValue("Avatar URL", profile.Picture)
+		}
+		if profile.Locale != nil {
+			Formatter.PrintKeyValue("Locale", fmt.Sprintf("%s_%s", profile.Locale.Language, profile.Locale.Country))
+		}
 	})
 }
 

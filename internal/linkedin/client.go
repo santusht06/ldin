@@ -168,7 +168,9 @@ func (c *Client) Request(ctx context.Context, method, endpoint string, query url
 	}
 
 	// Set standard LinkedIn REST API headers
-	if c.AccessToken != "" {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+
+	if c.AccessToken != "" && !strings.Contains(fullURL, "voyager") {
 		req.Header.Set("Authorization", "Bearer "+c.AccessToken)
 	}
 
@@ -181,8 +183,10 @@ func (c *Client) Request(ctx context.Context, method, endpoint string, query url
 		req.Header.Set("Cookie", cookieStr)
 	}
 
-	req.Header.Set("Linkedin-Version", c.APIVersion)
-	req.Header.Set("X-Restli-Protocol-Version", "2.0.0")
+	if !strings.Contains(fullURL, "voyager") {
+		req.Header.Set("Linkedin-Version", c.APIVersion)
+		req.Header.Set("X-Restli-Protocol-Version", "2.0.0")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 

@@ -15,18 +15,23 @@ import (
 	"github.com/santusht/ldin/internal/profilecode"
 )
 
-// ProfileResponse represents LinkedIn Member profile data
+// ProfileResponse represents live LinkedIn Member profile data returned by the server
 type ProfileResponse struct {
-	ID         string `json:"id"`
-	Sub        string `json:"sub"`
-	Name       string `json:"name"`
-	GivenName  string `json:"given_name"`
-	FamilyName string `json:"family_name"`
-	Picture    string `json:"picture"`
-	Email      string `json:"email"`
-	Headline   string `json:"headline,omitempty"`
-	VanityName string `json:"vanityName,omitempty"`
-	Location   string `json:"location,omitempty"`
+	ID            string `json:"id,omitempty"`
+	Sub           string `json:"sub,omitempty"`
+	Name          string `json:"name,omitempty"`
+	GivenName     string `json:"given_name,omitempty"`
+	FamilyName    string `json:"family_name,omitempty"`
+	Picture       string `json:"picture,omitempty"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified,omitempty"`
+	Headline      string `json:"headline,omitempty"`
+	VanityName    string `json:"vanityName,omitempty"`
+	Location      string `json:"location,omitempty"`
+	Locale        *struct {
+		Country  string `json:"country,omitempty"`
+		Language string `json:"language,omitempty"`
+	} `json:"locale,omitempty"`
 }
 
 // VoyagerProfileData holds the rich real-time profile from LinkedIn's Voyager API
@@ -45,16 +50,20 @@ type VoyagerProfileData struct {
 	Certifications []profilecode.Certification
 }
 
-// GetCurrentMemberProfile fetches active member's profile details via OpenID
+// GetCurrentMemberProfile fetches active member's live profile data directly from LinkedIn server /v2/userinfo
 func (c *Client) GetCurrentMemberProfile(ctx context.Context) (*ProfileResponse, error) {
-	userInfoBytes, err := c.Request(ctx, "GET", "https://api.linkedin.com/v2/userinfo", nil, nil, nil)
+	if c.AccessToken == "" {
+		return nil, fmt.Errorf("no access token configured. Please run `ldin auth login` or set LINKEDIN_TOKEN")
+	}
+
+	userInfoBytes, err := c.Request(ctx, "GET", "/v2/userinfo", nil, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed fetching user info: %w", err)
+		return nil, fmt.Errorf("failed fetching real-time profile from LinkedIn server: %w", err)
 	}
 
 	var u ProfileResponse
 	if err := json.Unmarshal(userInfoBytes, &u); err != nil {
-		return nil, fmt.Errorf("failed decoding user info: %w", err)
+		return nil, fmt.Errorf("failed decoding live server JSON: %w", err)
 	}
 
 	if u.Name == "" && (u.GivenName != "" || u.FamilyName != "") {

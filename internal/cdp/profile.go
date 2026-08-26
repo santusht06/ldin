@@ -131,7 +131,7 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
       }
     }
 
-    let location = 'Indore, Madhya Pradesh, India';
+    let location = '';
     for (const text of allDivs) {
       if ((text.includes('Indore') || text.includes('India')) && text.length < 80 && !text.includes('OSC') && !text.includes('Software') && !text.includes('Open to')) {
         location = text;
@@ -140,90 +140,82 @@ func FetchFullProfileView(ctx context.Context, bridge *Bridge, vanityName string
     }
 
     // 3. Extract About / Summary
-    let about = 'Backend-focused Software Engineer passionate about scalable distributed systems, systems programming, and high-performance backend infrastructure. Active open-source contributor and technical builder.';
+    let about = '';
     const allSections = Array.from(document.querySelectorAll('section, div._4c3e257f'));
     for (const s of allSections) {
       const text = s.innerText || '';
       if (text.startsWith('About') || s.querySelector('#about')) {
         const clean = text.replace(/^About\s*/i, '').replace(/…\s*see more/gi, '').trim();
-        if (clean.length > 20) about = clean;
+        if (clean.length > 5) about = clean;
         break;
       }
     }
 
-    // 4. Skills list
-    const skills = [
-      "Go (Golang)",
-      "Python",
-      "JavaScript",
-      "FastAPI",
-      "PostgreSQL",
-      "Redis",
-      "Docker",
-      "Kubernetes",
-      "AWS",
-      "Distributed Systems",
-      "High Performance Computing",
-      "Microservices Architecture",
-      "System Design & Networking",
-    ];
-
-    // 5. Experience list
-    const experience = [
-      {
-        role: "Open Source Contributor / Fellow",
-        company: "The Linux Foundation",
-        startDate: "2024-01",
-        endDate: "Present",
-        current: true,
-        description: "Contributing to cloud native infrastructure and distributed open source software tooling."
-      },
-      {
-        role: "Software Engineer",
-        company: "ShareXpress Systems",
-        startDate: "2024-01",
-        endDate: "Present",
-        current: true,
-        description: "Architected fault-tolerant storage engines and Circuit Breaker patterns in Go & MinIO to prevent retry storms."
+    // 4. Dynamic Skills extraction
+    const skills = [];
+    for (const s of allSections) {
+      const text = s.innerText || '';
+      if (text.startsWith('Skills') || s.querySelector('#skills')) {
+        const items = Array.from(s.querySelectorAll('li, div.pvs-entity'));
+        for (const it of items) {
+          const t = (it.innerText || '').split('\n')[0].trim();
+          if (t && !skills.includes(t) && !t.includes('Skills')) skills.push(t);
+        }
       }
-    ];
+    }
 
-    // 6. Education list
-    const education = [
-      {
-        school: "Medi-Caps University",
-        degree: "Bachelor of Technology - BTech, Computer Science and Engineering",
-        fieldOfStudy: "Computer Science & Distributed Systems",
-        startDate: "2023",
-        endDate: "2027",
+    // 5. Dynamic Experience extraction
+    const experience = [];
+    for (const s of allSections) {
+      const text = s.innerText || '';
+      if (text.startsWith('Experience') || s.querySelector('#experience')) {
+        const items = Array.from(s.querySelectorAll('li, div.pvs-entity'));
+        for (const it of items) {
+          const lines = (it.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+          if (lines.length >= 2 && !lines[0].includes('Experience')) {
+            experience.push({
+              role: lines[0],
+              company: lines[1] || '',
+              startDate: lines[2] || '',
+              description: lines.slice(3).join(' '),
+            });
+          }
+        }
       }
-    ];
+    }
 
-    // 7. Certifications
-    const certs = [
-      {
-        name: "Leetcode Guardian (Top Competitive Programmer)",
-        issuingOrg: "LeetCode",
-      },
-      {
-        name: "Buildverse Ed-tech Winner 2026",
-        issuingOrg: "Buildverse",
+    // 6. Dynamic Education extraction
+    const education = [];
+    for (const s of allSections) {
+      const text = s.innerText || '';
+      if (text.startsWith('Education') || s.querySelector('#education')) {
+        const items = Array.from(s.querySelectorAll('li, div.pvs-entity'));
+        for (const it of items) {
+          const lines = (it.innerText || '').split('\n').map(l => l.trim()).filter(Boolean);
+          if (lines.length >= 1 && !lines[0].includes('Education')) {
+            education.push({
+              school: lines[0],
+              degree: lines[1] || '',
+              startDate: lines[2] || '',
+            });
+          }
+        }
       }
-    ];
+    }
 
     return JSON.stringify({
       vanityName: vn,
       firstName: firstName,
       lastName: lastName,
-      headline: headline || "OSC @the linux foundation | Software Engineer | Buildverse Ed-tech winner 2026 🎖️| Leetcode Guardian ⭐️ | Python, Golang, JavaScript | AWS, Kubernetes, Docker | Distributed Systems",
+      headline: headline,
       location: location,
       summary: about,
       skills: skills,
       experience: experience,
       education: education,
-      certifications: certs,
-      languages: ["English", "Hindi"],
-      followers: 963,
+      certifications: [],
+      languages: [],
+      followers: 0,
     });
   } catch(e) {
     return JSON.stringify({error: e.toString()});
