@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/santusht/ldin/internal/agent"
+	"github.com/santusht/ldin/internal/browser"
 	"github.com/santusht/ldin/internal/cdp"
 	"github.com/santusht/ldin/internal/linkedin"
 	"github.com/santusht/ldin/internal/output"
@@ -52,16 +53,41 @@ var profileShowCmd = &cobra.Command{
 }
 
 func runProfileShow(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	vanityName := ""
-	if creds, err := ConfigMgr.LoadProfile(AppCfg.ActiveProfile); err == nil {
+	creds, credErr := ConfigMgr.LoadProfile(AppCfg.ActiveProfile)
+	if credErr == nil {
 		vanityName = creds.VanityName
 	}
 
-	// --- Strategy 1: Chrome DevTools Protocol (real-time, bypasses TLS fingerprinting) ---
-	Formatter.Info("Connecting to Chrome CDP bridge for real-time data...")
+	// --- Strategy 0: Headless Chromium (no GUI, fully terminal, bypasses JA3) ---
+	if credErr == nil && creds.SessionCookie != "" {
+		Formatter.Info("Launching headless Chromium...")
+		hb, err := browser.Launch(ctx)
+		if err == nil {
+			defer hb.Close()
+			if injectErr := hb.InjectSession(creds.SessionCookie, creds.CSRFToken); injectErr == nil {
+				if openErr := hb.OpenPage(ctx, "https://www.linkedin.com"); openErr == nil {
+					if vanityName == "" {
+						vanityName, _, _ = hb.GetCurrentUser(ctx)
+					}
+					profile, err := hb.FetchVoyagerProfile(ctx, vanityName)
+					if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
+						Formatter.Success("Profile fetched via headless Chromium ✓")
+						return renderCDPProfile(profile)
+					}
+					Formatter.Warning("Headless fetch returned empty data, trying CDP bridge...")
+				}
+			}
+		} else {
+			Formatter.Warning("Headless Chromium not set up (run: ldin browser setup). Trying CDP bridge...")
+		}
+	}
+
+	// --- Strategy 1: CDP Bridge (existing Chrome window) ---
+	Formatter.Info("Checking Chrome CDP bridge on port 9222...")
 	tabs, cdpErr := cdp.ListTabs(cdp.DefaultCDPHost, cdp.DefaultCDPPort)
 	if cdpErr == nil {
 		tab := cdp.FindLinkedInTab(tabs)
@@ -69,45 +95,40 @@ func runProfileShow(cmd *cobra.Command, args []string) error {
 			bridge, err := cdp.Connect(ctx, tab)
 			if err == nil {
 				defer bridge.Close()
-				Formatter.Info("CDP connected → tab: %s", tab.Title)
+				Formatter.Info("CDP connected → %s", tab.Title)
 				profile, err := cdp.FetchFullProfileView(ctx, bridge, vanityName)
 				if err == nil && (profile.FirstName != "" || profile.Headline != "" || len(profile.Skills) > 0) {
 					return renderCDPProfile(profile)
 				}
-				Formatter.Warning("CDP fetch returned empty profile, trying direct Voyager...")
 			}
 		} else {
-			Formatter.Warning("No LinkedIn tab open in Chrome. Open linkedin.com in Chrome for best results.")
+			Formatter.Warning("No LinkedIn tab in Chrome — open linkedin.com in Chrome for best results")
 		}
-	} else {
-		Formatter.Warning("Chrome CDP not available (start with: ldin browser launch). Trying Voyager API...")
 	}
 
-	// --- Strategy 2: Voyager API with session cookie ---
+	// --- Strategy 2: Voyager API with session cookie (direct HTTP) ---
+	Formatter.Warning("Trying Voyager API...")
 	rich, voyagerErr := LinkedInClient.GetRichProfile(ctx)
 	if voyagerErr == nil && (rich.FirstName != "" || len(rich.Skills) > 0) {
 		return renderVoyagerProfile(rich)
 	}
 
-	// --- Strategy 3: Official OpenID userinfo (basic identity only) ---
-	Formatter.Warning("Voyager API blocked. Fetching basic identity via official OpenID API...")
+	// --- Strategy 3: OpenID basic identity ---
+	Formatter.Warning("Fetching basic identity via official OpenID API...")
 	basic, err := LinkedInClient.GetCurrentMemberProfile(ctx)
 	if err != nil {
-		return fmt.Errorf("all profile fetch strategies failed.\n\nTo get full real-time profile:\n  1. ldin browser launch\n  2. ldin profile show")
+		return fmt.Errorf("all profile fetch strategies failed.\n\nTo fix:\n  ldin browser setup     (download headless Chromium)\n  ldin browser test      (verify it works)\n  ldin profile show      (full real-time profile)")
 	}
 
-	// Render basic identity
 	return Formatter.Print(basic, func() {
 		fmt.Println(output.TitleStyle.Render(" LinkedIn Profile (Basic — OpenID) "))
 		fmt.Printf("%s\n", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00D2FF")).Render(basic.Name))
 		Formatter.PrintDivider(50)
-		fmt.Println(output.HeaderStyle.Render("Headline"))
-		fmt.Printf("  %s\n\n", basic.Headline)
-		if basic.Location != "" {
-			fmt.Println(output.HeaderStyle.Render("Location"))
-			fmt.Printf("  %s\n\n", basic.Location)
+		if basic.Headline != "" {
+			fmt.Println(output.HeaderStyle.Render("Headline"))
+			fmt.Printf("  %s\n\n", basic.Headline)
 		}
-		fmt.Printf("\n  ℹ For full profile (skills, experience, education):\n  Run: ldin browser launch\n  Then: ldin profile show\n\n")
+		fmt.Printf("\n  ℹ For full profile (skills, experience, education):\n  Run: ldin browser setup\n  Then: ldin profile show\n\n")
 	})
 }
 
