@@ -65,6 +65,28 @@ The `make install` target places the `ldin` binary in `/usr/local/bin` (or `$GOP
        Human CLI                AI Agent                 Raw API
             │                        │                        │
       ldin post...             ldin ai ...              ldin api ...
+      ldin profile...          ldin agent ...           (Escape Hatch)
+            │                        │                        │
+            └────────────────────────┼────────────────────────┘
+                                     │
+                              LinkedIn REST API
+                        (OAuth 2.0 PKCE / Version 202608)
+```
+
+---
+
+## ⚡ 4 Levels of Control
+
+| Level | Audience | Example Command |
+| :--- | :--- | :--- |
+| **1. High-Level Ergonomics** | Fast updates & daily posts | `ldin post create "I just launched a new open-source CLI!"` |
+| **2. Power User** | Granular targeting & automation | `ldin post create --commentary-file ./launch.md --image ./arch.png --visibility PUBLIC --json` |
+| **3. API Engineer** | Raw endpoint flexibility | `ldin api POST /rest/posts --body ./payload.json -H "Linkedin-Version: 202608"` |
+| **4. AI Agent** | Context‑driven autonomous work | `ldin ai "Inspect my recent GitHub commits and draft a technical post"` |
+
+---
+
+## 🚀 Quickstart
 
 ### 1. Build & Install
 
@@ -97,7 +119,7 @@ ldin auth status
 ldin capabilities
 ```
 
-Surfaces which endpoints are open for self-service vs those requiring LinkedIn Community Management approval.
+Surfaces which endpoints are open for self‑service vs those requiring LinkedIn Community Management approval.
 
 ---
 
@@ -105,34 +127,12 @@ Surfaces which endpoints are open for self-service vs those requiring LinkedIn C
 
 ### 1. LinkedIn Profile-as-Code (`ldin profile`)
 
-Treat your career profile just like infrastructure as code:
+Treat your career profile just like **infrastructure‑as‑code**:
 
 ```bash
 # Export active profile to declarative YAML
 ldin profile export -o profile.yaml
 
-# Audit & lint your profile for SEO, character limits, and section strength
-ldin profile validate --file profile.yaml
-
-# View colored terminal diff between local YAML and live profile
-ldin profile diff --file profile.yaml
-
-# Ask AI to optimize your headline and experience for backend/distributed systems
-ldin profile optimize --file profile.yaml
-
-# Edit in your configured $EDITOR
-ldin profile edit
-```
-
-Example `profile.yaml`:
-```yaml
-name: Santusht Kotai
-headline: Software Engineer | Backend Engineering | Distributed Systems
-location: Indore, India
-about: |
-  Backend-focused Software Engineer passionate about scalable distributed systems
-  and developer tooling.
-skills:
   - Go
   - Python
   - FastAPI
@@ -275,6 +275,3 @@ agent:
     - read
     - draft
     - ai
-```
-
----
