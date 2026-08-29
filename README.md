@@ -20,13 +20,35 @@
 
 ---
 
+## 📦 Installation
+
+### Prerequisites
+- Go 1.25 or later
+- GNU Make
+
+### Build from source
+```bash
+git clone https://github.com/santusht/ldin.git
+cd ldin
+make build
+```
+
+### Install binary to your PATH
+```bash
+make install
+```
+
+The `make install` target places the `ldin` binary in `/usr/local/bin` (or `$GOPATH/bin` if `$GOPATH` is set).
+
+---
+
 ## 🌟 Philosophy
 
 > **"Simple things should be simple. Complex things should be possible."**
 >
 > `gh` manages your code identity. `ldin` manages your professional identity.
 
-`ldin` is not a scraper or a spam bot. It is a developer-first command-line workspace built around **official LinkedIn REST APIs**, **Profile-as-Code**, and an **autonomous AI agent layer**.
+`ldin` is not a scraper or a spam bot. It is a developer‑first command‑line workspace built around **official LinkedIn REST APIs**, **Profile-as-Code**, and an **autonomous AI agent layer**.
 
 ---
 
@@ -43,28 +65,6 @@
        Human CLI                AI Agent                 Raw API
             │                        │                        │
       ldin post...             ldin ai ...              ldin api ...
-      ldin profile...          ldin agent ...           (Escape Hatch)
-            │                        │                        │
-            └────────────────────────┼────────────────────────┘
-                                     │
-                              LinkedIn REST API
-                        (OAuth 2.0 PKCE / Version 202608)
-```
-
----
-
-## ⚡ 4 Levels of Control
-
-| Level | Audience | Example Command |
-| :--- | :--- | :--- |
-| **1. High-Level Ergonomics** | Fast updates & daily posts | `ldin post create "I just launched a new open-source CLI!"` |
-| **2. Power User** | Granular targeting & automation | `ldin post create --commentary-file ./launch.md --image ./arch.png --visibility PUBLIC --json` |
-| **3. API Engineer** | Raw endpoint flexibility | `ldin api POST /rest/posts --body ./payload.json -H "Linkedin-Version: 202608"` |
-| **4. AI Agent** | Context-driven autonomous work | `ldin ai "Inspect my recent GitHub commits and draft a technical post"` |
-
----
-
-## 🚀 Quickstart
 
 ### 1. Build & Install
 
@@ -278,7 +278,3 @@ agent:
 ```
 
 ---
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
