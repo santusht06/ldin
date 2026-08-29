@@ -133,6 +133,28 @@ Treat your career profile just like **infrastructure‑as‑code**:
 # Export active profile to declarative YAML
 ldin profile export -o profile.yaml
 
+# Audit & lint your profile for SEO, character limits, and section strength
+ldin profile validate --file profile.yaml
+
+# View colored terminal diff between local YAML and live profile
+ldin profile diff --file profile.yaml
+
+# Ask AI to optimize your headline and experience for backend/distributed systems
+ldin profile optimize --file profile.yaml
+
+# Edit in your configured $EDITOR
+ldin profile edit
+```
+
+Example `profile.yaml`:
+```yaml
+name: Santusht Kotai
+headline: Software Engineer | Backend Engineering | Distributed Systems
+location: Indore, India
+about: |
+  Backend-focused Software Engineer passionate about scalable distributed systems
+  and developer tooling.
+skills:
   - Go
   - Python
   - FastAPI
@@ -162,7 +184,7 @@ ldin post create "Excited to open source ldin!"
 # Attach image / PDF document
 ldin post create --file ./post.md --image ./architecture.png
 
-# Interactive Poll
+# Interactive poll
 ldin post create --poll "Primary backend runtime?" --options "Go,Rust,Python,Java"
 
 # Offline drafts
@@ -178,28 +200,6 @@ ldin post publish draft-1787751791
 Instead of copying text between browser tabs, `ldin` knows your engineering context:
 
 ```bash
-# Sync local Git or GitHub repository context
-ldin repo sync .
-ldin repo sync santusht06/interleet
-
-# Turn code contributions into a LinkedIn post
-ldin ai "Write a LinkedIn post about my latest commits and architecture trade-offs"
-
-# Craft technical replies to comments
-ldin ai reply urn:li:comment:123 "Thank them for feedback on distributed caching"
-
-# Autonomous agent task execution
-ldin agent run "Audit my profile skills and suggest a technical post about Go concurrency"
-```
-
-#### Agent Safety Sandbox
-```bash
-# Inspect agent permissions
-ldin agent permissions
-
-# Explicitly grant or revoke live publish authority
-ldin agent allow publish
-ldin agent deny publish
 ```
 
 ---
@@ -271,7 +271,3 @@ ai:
   model: "gemini-2.5-flash"
 agent:
   auto_publish: false
-  allowed_scopes:
-    - read
-    - draft
-    - ai
