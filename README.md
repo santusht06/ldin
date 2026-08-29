@@ -200,6 +200,28 @@ ldin post publish draft-1787751791
 Instead of copying text between browser tabs, `ldin` knows your engineering context:
 
 ```bash
+# Sync local Git or GitHub repository context
+ldin repo sync .
+ldin repo sync santusht06/interleet
+
+# Turn code contributions into a LinkedIn post
+ldin ai "Write a LinkedIn post about my latest commits and architecture trade‑offs"
+
+# Craft technical replies to comments
+ldin ai reply urn:li:comment:123 "Thank them for feedback on distributed caching"
+
+# Autonomous agent task execution
+ldin agent run "Audit my profile skills and suggest a technical post about Go concurrency"
+```
+
+#### Agent Safety Sandbox
+```bash
+# Inspect agent permissions
+ldin agent permissions
+
+# Explicitly grant or revoke live publish authority
+ldin agent allow publish
+ldin agent deny publish
 ```
 
 ---
@@ -219,7 +241,7 @@ ldin api POST /rest/posts --body @post.json -H "Linkedin-Version: 202608"
 
 ---
 
-### 5. Multi-Identity & Unix Scripting (`--json`, `--profile`)
+### 5. Multi‑Identity & Unix Scripting (`--json`, `--profile`)
 
 ```bash
 # Manage multiple identities (e.g. personal vs company)
@@ -237,37 +259,12 @@ ldin post list --json | jq '.published[].id'
 
 | Command Group | Subcommands | Description |
 | :--- | :--- | :--- |
-| `ldin auth` | `login`, `logout`, `status`, `refresh`, `scopes`, `whoami`, `switch` | Multi-identity authentication & tokens |
+| `ldin auth` | `login`, `logout`, `status`, `refresh`, `scopes`, `whoami`, `switch` | Multi‑identity authentication & token management |
 | `ldin capabilities` | `capabilities` | Live LinkedIn API capability & scope matrix |
-| `ldin profile` | `get`, `show`, `export`, `import`, `diff`, `validate`, `optimize`, `sync`, `edit` | LinkedIn Profile-as-Code engine |
-| `ldin post` | `create`, `draft`, `publish`, `preview`, `list`, `get`, `delete`, `text`, `image`, `video`, `document`, `poll` | Multi-format post publishing & drafts |
+| `ldin profile` | `get`, `show`, `export`, `import`, `diff`, `validate`, `optimize`, `sync`, `edit` | Profile‑as‑Code engine |
+| `ldin post` | `create`, `draft`, `publish`, `preview`, `list`, `get`, `delete`, `text`, `image`, `video`, `document`, `poll` | Multi‑format post publishing & drafts |
 | `ldin comment` | `create`, `reply`, `list`, `delete` | Comments and nested thread conversations |
 | `ldin reaction` | `like`, `react`, `unlike` | Send and manage reactions (`LIKE`, `PRAISE`, `EMPATHY`, etc.) |
 | `ldin social` | `summary` | Aggregated engagement counts and current user status |
-| `ldin media` | `upload` | 3-step media asset upload protocol |
-| `ldin analytics` | `profile`, `post`, `posts` | Impressions, reach, and engagement time-series |
-| `ldin org` | `list`, `post` | Manage LinkedIn Company Pages |
-| `ldin event` | `list`, `create` | LinkedIn live audio/video events |
-| `ldin ads` | `accounts`, `campaigns` | Marketing Developer Platform campaigns |
-| `ldin repo` | `sync` | Git & GitHub context extraction |
-| `ldin ai` | `post`, `profile`, `reply` | Intelligent content generation & copilot |
-| `ldin agent` | `run`, `permissions`, `allow`, `deny`, `tools` | Autonomous ReAct agent loop |
-| `ldin config` | `get`, `set`, `list`, `path` | Configuration management (`~/.ldin/config.yaml`) |
-| `ldin api` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE` | Raw authenticated REST API client |
-
----
-
-## 🛠️ Configuration
-
-Stored in `~/.ldin/config.yaml`:
-```yaml
-version: "1.0.0"
-active_profile: "default"
-output_format: "human"
-linkedin_api_version: "202608"
-editor: "nano"
-ai:
-  provider: "gemini"        # gemini, openai, claude, ollama
-  model: "gemini-2.5-flash"
-agent:
-  auto_publish: false
+| `ldin media` | `upload` | 3‑step media asset upload protocol |
+| `ldin analytics` | `profile`, `post`, `posts`
