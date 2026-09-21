@@ -267,4 +267,4 @@ ldin post list --json | jq '.published[].id'
 | `ldin reaction` | `like`, `react`, `unlike` | Send and manage reactions (`LIKE`, `PRAISE`, `EMPATHY`, etc.) |
 | `ldin social` | `summary` | Aggregated engagement counts and current user status |
 | `ldin media` | `upload` | 3‑step media asset upload protocol |
-| `ldin analytics` | `profile`, `post`, `posts`
+| `ldin analytics` | `profile`, `post`, `posts` | Analytics commands for profile and post performance
